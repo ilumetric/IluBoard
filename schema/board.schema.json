@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ilumetric.github.io/IluBoard/schema/board.schema.json",
+  "title": "IluBoard board.json",
+  "description": "A kanban board in one file. Checks the shape of the file; `node iluboard.mjs validate` additionally checks that ids are unique, that every card's column is listed in `columns`, and that cards in todo/doing have done_when.",
+  "type": "object",
+  "required": ["format", "version", "columns", "cards"],
+  "properties": {
+    "format": { "const": "iluboard" },
+    "version": { "const": 1 },
+    "meta": {
+      "type": "object",
+      "properties": {
+        "title": { "type": "string", "description": "Board title shown in the app." },
+        "id_prefix": { "type": "string", "pattern": "^[A-Za-z0-9_.-]+$", "description": "Prefix of generated card ids (B → B9, B10…). Optional: the most common prefix of existing ids is used otherwise." },
+        "updated": { "$ref": "#/$defs/date", "description": "When the board was last saved." }
+      },
+      "patternProperties": { "^x_": true },
+      "additionalProperties": true
+    },
+    "columns": {
+      "type": "array",
+      "description": "Column ids in display order. Standard: idea, todo, doing, done, dropped.",
+      "items": { "type": "string", "minLength": 1 },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "cards": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/card" }
+    }
+  },
+  "patternProperties": { "^x_": true },
+  "additionalProperties": true,
+  "$defs": {
+    "date": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+    "card": {
+      "type": "object",
+      "required": ["id", "title", "column"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$", "description": "Stable id; documents link to cards by it. Never renamed." },
+        "title": { "type": "string", "minLength": 1 },
+        "column": { "type": "string", "description": "Status: one of the board's columns." },
+        "order": { "type": "integer", "minimum": 0, "description": "Position inside the column, 0 = top. Renumbered 0, 1, 2… on save." },
+        "priority": { "enum": ["P0", "P1", "P2", "P3"] },
+        "size": { "enum": ["S", "M", "L", "XL"] },
+        "owner": { "type": "string", "description": "Free text: max, producer, narrative, design, code…" },
+        "goal": { "type": "string", "description": "Milestone from roadmap.md: 3a, 3b…" },
+        "done_when": { "type": "string", "description": "When the card counts as done. Required in todo and doing." },
+        "notes": { "type": "string" },
+        "tags": { "type": "array", "items": { "type": "string" } },
+        "due": { "$ref": "#/$defs/date" },
+        "updated": { "$ref": "#/$defs/date" },
+        "updated_by": { "enum": ["human", "agent"] }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "column": { "enum": ["todo", "doing"] } }, "required": ["column"] },
+          "then": { "required": ["done_when"], "properties": { "done_when": { "minLength": 1 } } }
+        }
+      ],
+      "patternProperties": { "^x_": true },
+      "additionalProperties": true
+    }
+  }
+}

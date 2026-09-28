@@ -1,0 +1,30 @@
+# IluBoard
+
+> IluBoard is a static kanban board whose source of truth is one diff-friendly file, `board.json`, in a git repository. A human moves cards in the browser and saves into the same file; an AI agent never needs the browser: it reads and edits `board.json` with a single-file, dependency-free Node CLI (text, diff --git, validate, fmt, move, add, set, md).
+
+## Quick start
+
+Needs Node 20+ and nothing else:
+
+```bash
+curl -O https://ilumetric.github.io/IluBoard/iluboard.mjs
+node iluboard.mjs text board.json
+node iluboard.mjs diff board.json --git
+```
+
+## Docs
+
+- [Agent guide](https://ilumetric.github.io/IluBoard/docs/AGENT.md): commands, the human–agent loop, file-safety rules
+- [Format reference](https://ilumetric.github.io/IluBoard/docs/FORMAT.md): every field of board.json
+- [JSON Schema](https://ilumetric.github.io/IluBoard/schema/board.schema.json)
+- [Example board](https://ilumetric.github.io/IluBoard/examples/board.json)
+- [Web app](https://ilumetric.github.io/IluBoard/): Open folder → board.json → Save (Chrome, Edge)
+- [Single-file CLI](https://ilumetric.github.io/IluBoard/iluboard.mjs): generated bundle of tools/iluboard.mjs
+
+## Rules
+
+- Reference cards by id (`B8`); ids are unique and never change.
+- `column` is one of `columns` (idea, todo, doing, done, dropped). Cards in todo and doing need `done_when`.
+- Start a session with `node iluboard.mjs diff board.json --git` to see what the human changed.
+- Re-read `board.json` right before editing; never write back a copy kept from an earlier turn. Prefer `move` / `add` / `set`; after hand edits run `fmt` and `validate`.
+- The CLI records `"updated_by": "agent"` and today's date on every card it changes.

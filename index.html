@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="ru" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark light">
+  <title>IluBoard</title>
+  <meta name="description" content="IluBoard — канбан-доска, у которой источник правды — один board.json в git-репозитории. Kanban board whose source of truth is one board.json in a git repo.">
+  <link rel="help" type="text/plain" href="llms.txt" title="Instructions for AI agents">
+  <link rel="alternate" type="text/markdown" href="docs/AGENT.md" title="IluBoard for AI agents">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23171717'/%3E%3Crect x='7' y='8' width='5' height='16' rx='1.5' fill='%23ececec'/%3E%3Crect x='13.5' y='8' width='5' height='10' rx='1.5' fill='%23ececec'/%3E%3Crect x='20' y='8' width='5' height='13' rx='1.5' fill='%2310a37f'/%3E%3C/svg%3E">
+  <script>
+    // theme and language before first paint (see src/app/prefs.js)
+    (function () {
+      var t = 'system', l = null;
+      try { t = localStorage.getItem('iluboard.theme') || 'system'; l = localStorage.getItem('iluboard.lang'); } catch (e) { /* storage disabled */ }
+      if (t === 'system') t = window.matchMedia && matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', t === 'light' ? 'light' : 'dark');
+      if (l !== 'ru' && l !== 'en') l = /^ru\b/i.test(navigator.language || '') ? 'ru' : 'en';
+      document.documentElement.lang = l;
+    })();
+  </script>
+  <link rel="stylesheet" href="src/app/styles.css">
+</head>
+<body>
+  <div id="app">
+    <aside id="sidebar"></aside>
+    <div id="scrim" hidden></div>
+    <main id="main">
+      <header id="topbar"></header>
+      <div id="banner" hidden></div>
+      <section id="content"></section>
+      <div id="composer-wrap" hidden></div>
+    </main>
+  </div>
+  <div id="toasts" aria-live="polite"></div>
+  <noscript>IluBoard needs JavaScript (ES modules). / Для IluBoard нужен JavaScript.</noscript>
+  <script type="module" src="src/app/main.js"></script>
+</body>
+</html>

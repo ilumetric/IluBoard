@@ -1,0 +1,23 @@
+{
+  "name": "iluboard",
+  "version": "0.1.0",
+  "description": "Kanban board whose source of truth is one board.json in a git repo. Static site, no build step; single-file CLI for AI agents.",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ilumetric/IluBoard.git"
+  },
+  "bin": {
+    "iluboard": "tools/iluboard.mjs"
+  },
+  "scripts": {
+    "test": "node --test \"test/*.test.js\"",
+    "validate": "node tools/iluboard.mjs validate examples/board.json",
+    "bundle": "node tools/bundle.mjs",
+    "serve": "node tools/serve.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

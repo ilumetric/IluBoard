@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "iluboard",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["tools/serve.mjs", "--port", "8787"],
+      "port": 8787
+    }
+  ]
+}
