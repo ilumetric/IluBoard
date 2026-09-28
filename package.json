@@ -1,6 +1,6 @@
 {
   "name": "iluboard",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Kanban board whose source of truth is one board.json in a git repo. Static site, no build step; single-file CLI for AI agents.",
   "type": "module",
   "license": "MIT",

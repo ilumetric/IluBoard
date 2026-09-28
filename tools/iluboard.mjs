@@ -10,7 +10,7 @@ import { execFileSync } from 'node:child_process';
 import { APP_VERSION } from '../src/core/version.js';
 import {
   VERSION, EDITABLE_KEYS, emptyBoard, normalize, validate, issueText, serialize,
-  findCard, moveCard, addCard, setFields, today,
+  findCard, cardsIn, moveCard, addCard, setFields, today,
 } from '../src/core/model.js';
 import { boardText, boardMarkdown, columnLabel } from '../src/core/text.js';
 import { diffBoards, diffText } from '../src/core/diff.js';
@@ -33,7 +33,8 @@ Write (re-read → change → validate → write canonical file; nothing is writ
   add <file> --title "…" [--id B9] [--column todo] [--priority P1] [--size M]
        [--owner max] [--goal 3b] [--done-when "…"] [--notes "…"] [--tags a,b]
        [--due 2026-10-12] [--top]
-  set <file> <id> [--title "…"] [--priority P0] …  change fields ("" removes a field)
+  set <file> <id> [--title "…"] [--priority P0] …  change fields ("" removes a field); same fields as add
+       [--column done [--top | --index N]]       and/or move the card (bottom of the column by default)
   init <file> [--title "Project"] [--prefix B]   create an empty board (refuses to overwrite)
 
 Options
@@ -41,6 +42,7 @@ Options
   --by agent|human  who is recorded in updated_by (default agent)
   --version, --help
 
+Unknown options, extra arguments and bad values are errors (exit 2); nothing is ignored silently.
 Columns: idea, todo, doing, done, dropped (from the file). todo and doing need done_when.
 Docs: https://ilumetric.github.io/IluBoard/docs/AGENT.md
 `;
@@ -72,6 +74,46 @@ function parseArgs(argv) {
 }
 
 class UsageError extends Error {}
+
+const GLOBAL_OPTS = ['lang', 'by', 'help', 'h', 'version', 'v'];
+const OPTIONS = {
+  text: ['full', 'columns'],
+  md: ['out', 'columns'],
+  validate: ['json'],
+  diff: ['git', 'json'],
+  fmt: ['check'],
+  move: ['top', 'index', 'done_when'],
+  add: ['id', 'column', 'top', ...EDITABLE_KEYS],
+  set: ['column', 'top', 'index', ...EDITABLE_KEYS],
+  init: ['title', 'prefix', 'force'],
+};
+/** Commands that also take custom --x_… card fields. */
+const X_FIELDS = new Set(['add', 'set']);
+/** Most positional arguments (after the command) each command takes. */
+const POSITIONAL = { text: 1, md: 1, validate: 1, diff: 2, fmt: 1, move: 3, add: 1, set: 2, init: 1 };
+const flag = (k) => `--${k.replace(/_/g, '-')}`;
+
+function checkArgs(cmd, pos, opt) {
+  const allowed = new Set([...GLOBAL_OPTS, ...OPTIONS[cmd]]);
+  for (const k of Object.keys(opt)) {
+    if (allowed.has(k) || (X_FIELDS.has(cmd) && k.startsWith('x_'))) continue;
+    const hint = k === 'column' && cmd === 'move' ? ' (the column is a positional argument: move <file> <id> <column>)' : '';
+    throw new UsageError(`${cmd} does not take ${flag(k)}${hint}; options: ${OPTIONS[cmd].map(flag).join(' ')}`);
+  }
+  if (pos.length > POSITIONAL[cmd]) throw new UsageError(`${cmd}: unexpected argument "${pos[POSITIONAL[cmd]]}" (see --help)`);
+  if (opt.lang !== undefined && opt.lang !== 'ru' && opt.lang !== 'en') throw new UsageError('--lang must be ru or en');
+  if (opt.by !== undefined && opt.by !== 'agent' && opt.by !== 'human') throw new UsageError('--by must be agent or human');
+  if (opt.top && opt.index !== undefined) throw new UsageError('use either --top or --index, not both');
+}
+
+/** --top → 0, --index N → N, else undefined (bottom). */
+function indexOpt(opt) {
+  if (opt.top) return 0;
+  if (opt.index === undefined) return undefined;
+  const n = Number(opt.index);
+  if (!Number.isInteger(n) || n < 0) throw new UsageError(`--index must be a whole number ≥ 0 (got "${opt.index}")`);
+  return n;
+}
 
 const out = (s) => process.stdout.write(s.endsWith('\n') ? s : `${s}\n`);
 const err = (s) => process.stderr.write(s.endsWith('\n') ? s : `${s}\n`);
@@ -190,8 +232,7 @@ const COMMANDS = {
     if (!findCard(doc, id)) throw new UsageError(`no card "${id}"`);
     if (!doc.columns.includes(column)) throw new UsageError(`no column "${column}" (columns: ${doc.columns.join(', ')})`);
     if (opt.done_when !== undefined) setFields(doc, id, { done_when: String(opt.done_when) }, { by });
-    const index = opt.top ? 0 : opt.index !== undefined ? Number(opt.index) : undefined;
-    const card = moveCard(doc, id, column, index, { by });
+    const card = moveCard(doc, id, column, indexOpt(opt), { by });
     if (!writeBoard(file, doc, lang)) return 1;
     out(`${card.id} → ${column} (${columnLabel(column, lang)}), position ${card.order}`);
     return 0;
@@ -204,7 +245,7 @@ const COMMANDS = {
     if (!fields.title) throw new UsageError('add needs --title');
     let card;
     try {
-      card = addCard(doc, { ...fields, id: opt.id, column: opt.column }, { by, index: opt.top ? 0 : undefined });
+      card = addCard(doc, { ...fields, id: opt.id, column: opt.column }, { by, index: indexOpt(opt) });
     } catch (e) { throw new UsageError(e.message); }
     if (!writeBoard(file, doc, lang)) return 1;
     out(`added ${card.id} → ${card.column} (${columnLabel(card.column, lang)})`);
@@ -215,10 +256,25 @@ const COMMANDS = {
     const file = need(pos[0], 'file');
     const id = need(pos[1], 'card id');
     const { doc } = readBoard(file);
-    if (!findCard(doc, id)) throw new UsageError(`no card "${id}"`);
+    const card = findCard(doc, id);
+    if (!card) throw new UsageError(`no card "${id}"`);
     const fields = fieldsFrom(opt);
-    if (!Object.keys(fields).length) throw new UsageError(`set needs at least one field (${EDITABLE_KEYS.map((k) => `--${k.replace(/_/g, '-')}`).join(' ')})`);
+    const target = opt.column === undefined ? undefined : String(opt.column);
+    const index = indexOpt(opt);
+    if (target !== undefined && !doc.columns.includes(target)) throw new UsageError(`no column "${target}" (columns: ${doc.columns.join(', ')})`);
+    if (!Object.keys(fields).length && target === undefined && index === undefined) {
+      throw new UsageError(`set needs at least one change (${OPTIONS.set.map(flag).join(' ')})`);
+    }
+    // fields first, so that --column todo --done-when "…" validates in one step
     const changed = setFields(doc, id, fields, { by });
+    const from = card.column;
+    const before = cardsIn(doc, from).indexOf(card);
+    // --column with the card's own column and no position is a no-op, not "send to bottom"
+    if ((target !== undefined && target !== from) || index !== undefined) {
+      moveCard(doc, id, target ?? from, index, { by });
+      if (card.column !== from) changed.push(`column ${from} → ${card.column}`);
+      else if (cardsIn(doc, from).indexOf(card) !== before) changed.push(`position ${before} → ${card.order}`);
+    }
     if (!changed.length) { out(`${id}: nothing changed`); return 0; }
     if (!writeBoard(file, doc, lang)) return 1;
     out(`${id}: ${changed.join(', ')}`);
@@ -257,6 +313,7 @@ function main(argv) {
   const lang = String(opt.lang || process.env.ILUBOARD_LANG || 'ru') === 'en' ? 'en' : 'ru';
   const by = opt.by === 'human' ? 'human' : 'agent';
   try {
+    checkArgs(cmd, pos, opt);
     return run({ pos, opt, lang, by }) ?? 0;
   } catch (e) {
     if (e instanceof UsageError || e instanceof SyntaxError) { err(`iluboard: ${e.message}`); return 2; }

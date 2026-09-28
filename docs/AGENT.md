@@ -36,8 +36,16 @@ node iluboard.mjs move board.json B12 doing --done-when "Max said yes"
 node iluboard.mjs add board.json --title "…" --column todo --priority P1 --size M \
      --owner max --goal 3b --done-when "…" --notes "…" --tags art,tech --due 2026-10-12
 node iluboard.mjs set board.json B9 --priority P0 --notes ""   # "" removes a field
+node iluboard.mjs set board.json B12 --column todo --done-when "…"   # edit and move in one step
 node iluboard.mjs init board.json --title "Project RUN" --prefix B
 ```
+
+Every command rejects options it does not know, extra arguments and bad
+values (`--index x`, `--by robot`) with exit code 2 and writes nothing — a typo
+never passes silently. `move` takes the column as an argument
+(`move board.json B8 done`); `set` takes it as `--column done` (bottom of the
+column, or `--top` / `--index N`), applying the other fields first, so
+`--done-when` can come in the same call.
 
 Options everywhere: `--lang ru|en` (text, md, diff and messages; default `ru`,
 or the `ILUBOARD_LANG` environment variable) and `--by agent|human` (who is

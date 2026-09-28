@@ -71,6 +71,56 @@ for (const cliPath of ['tools/iluboard.mjs', 'iluboard.mjs']) {
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
+  test(`${cliPath}: set --column moves the card (regression: it was silently ignored)`, () => {
+    const { dir, file } = tmp();
+    try {
+      const card = (id) => JSON.parse(readFileSync(file, 'utf8')).cards.find((c) => c.id === id);
+      const r = run('set', file, 'B8', '--column', 'done');
+      assert.equal(r.code, 0, r.err);
+      assert.match(r.out, /B8: column doing → done/);
+      assert.equal(card('B8').column, 'done');
+
+      // fields are applied before the move, so done_when can come in the same call
+      assert.equal(run('set', file, 'B12', '--column', 'todo').code, 1, 'todo without done_when → refused');
+      assert.equal(card('B12').column, 'idea');
+      assert.equal(run('set', file, 'B12', '--column', 'todo', '--done-when', 'Works', '--top').code, 0);
+      assert.equal(card('B12').column, 'todo');
+      assert.equal(card('B12').order, 0);
+
+      // same column without a position: nothing to do (not "send to bottom")
+      assert.match(run('set', file, 'B12', '--column', 'todo').out, /nothing changed/);
+      assert.equal(card('B12').order, 0);
+      assert.equal(run('set', file, 'B12', '--column', 'nope').code, 2);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  test(`${cliPath}: unknown options, extra arguments and bad values are errors, file untouched`, () => {
+    const { dir, file } = tmp();
+    try {
+      const before = readFileSync(file, 'utf8');
+      const cases = [
+        ['set', file, 'B8', '--prio', 'P0'],
+        ['set', file, 'B8', 'done'],
+        ['move', file, 'B8', '--column', 'done'],
+        ['move', file, 'B8', 'done', '--index', 'x'],
+        ['move', file, 'B8', 'done', '--top', '--index', '1'],
+        ['add', file, '--title', 't', '--colum', 'idea'],
+        ['text', file, '--json'],
+        ['set', file, 'B8', '--owner', 'max', '--by', 'robot'],
+        ['text', file, '--lang', 'de'],
+      ];
+      for (const args of cases) {
+        const r = run(...args);
+        assert.equal(r.code, 2, `${args.slice(2).join(' ')} → ${r.out}${r.err}`);
+        assert.match(r.err, /^iluboard: /);
+      }
+      assert.match(run('set', file, 'B8', '--prio', 'P0').err, /set does not take --prio/);
+      assert.match(run('move', file, 'B8', '--column', 'done').err, /positional argument/);
+      assert.equal(readFileSync(file, 'utf8'), before);
+      assert.equal(run('set', file, 'B8', '--x-estimate', '3').code, 0, 'custom x_ fields are allowed');
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
   test(`${cliPath}: validate fails with exit 1 and --json`, () => {
     const { dir, file } = tmp();
     try {
