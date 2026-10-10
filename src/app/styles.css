@@ -125,9 +125,12 @@ kbd {
   height: 100vh;
   height: 100dvh;
 }
-#app.sidebar-closed { grid-template-columns: 0 minmax(0, 1fr); }
+/* closed: one column. #main is pinned to the last column — the hidden sidebar
+   leaves the grid, and auto-placement would otherwise put #main into a 0px column */
+#app.sidebar-closed { grid-template-columns: minmax(0, 1fr); }
 #app.sidebar-closed #sidebar { display: none; }
 #main {
+  grid-column: -2 / -1;
   display: flex;
   flex-direction: column;
   min-width: 0;
