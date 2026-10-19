@@ -1,7 +1,7 @@
 // The board in words: `text` (one line per card, for agents) and `md`
 // (Markdown tables, e.g. for backlog.md). Pure module.
 
-import { CLOSED_COLUMNS, cardsIn } from './model.js';
+import { cardsIn, columnConf, isClosed } from './model.js';
 
 export const COLUMN_LABELS = {
   ru: { idea: 'идея', todo: 'к работе', doing: 'в работе', done: 'готово', dropped: 'отменено' },
@@ -31,7 +31,9 @@ export function plural(n, one, few, many) {
 }
 
 export const words = (lang) => WORDS[lang] || WORDS.en;
-export const columnLabel = (column, lang = 'ru') => (COLUMN_LABELS[lang] || COLUMN_LABELS.en)[column] || column;
+/** A column's name: meta.columns.<id>.label when the board has one, else the standard name, else the id. */
+export const columnLabel = (column, lang = 'ru', doc = null) => columnConf(doc, column).label
+  || (COLUMN_LABELS[lang] || COLUMN_LABELS.en)[column] || column;
 
 /** "B8 [P0/M] max — Title (до 2026-10-12)" */
 export function cardLine(card, lang = 'ru') {
@@ -62,7 +64,7 @@ export function boardText(doc, { lang = 'ru', full = false, columns } = {}) {
   out.push(`# ${title} — ${w.cards(doc.cards.length)}${upd}`);
   for (const col of pickColumns(doc, columns)) {
     const list = cardsIn(doc, col);
-    out.push('', `## ${columnLabel(col, lang)} (${col}) — ${list.length}`);
+    out.push('', `## ${columnLabel(col, lang, doc)} (${col}) — ${list.length}`);
     if (!list.length) out.push(w.empty);
     for (const c of list) {
       out.push(`- ${cardLine(c, lang)}`);
@@ -93,9 +95,9 @@ export function boardMarkdown(doc, { lang = 'ru', columns, source = 'board.json'
   out.push(`> ${w.exported}: \`${source}\`${doc.meta?.updated ? ` · ${w.updated} ${doc.meta.updated}` : ''} · ${w.noEdit} (\`node iluboard.mjs md ${source}\`)`);
   for (const col of pickColumns(doc, columns)) {
     const list = cardsIn(doc, col);
-    out.push('', `## ${capital(columnLabel(col, lang))} · ${list.length}`, '');
+    out.push('', `## ${capital(columnLabel(col, lang, doc))} · ${list.length}`, '');
     if (!list.length) { out.push(`_${w.empty}_`); continue; }
-    const closed = CLOSED_COLUMNS.includes(col);
+    const closed = isClosed(doc, col);
     out.push(`| id | ${w.task} | P | ${w.size} | ${w.owner} | ${capital(w.goal)} | ${capital(w.doneWhen)} | ${w.due2} |`);
     out.push('|---|---|---|---|---|---|---|---|');
     for (const c of list) {

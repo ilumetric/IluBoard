@@ -29,13 +29,19 @@ const DEFAULT_COLUMNS = ['idea', 'todo', 'doing', 'done', 'dropped'];
 const PRIORITIES = ['P0', 'P1', 'P2', 'P3'];
 const SIZES = ['S', 'M', 'L', 'XL'];
 const UPDATED_BY = ['human', 'agent'];
-/** Columns whose cards must say when they are done. */
+/** Columns whose cards must say when they are done (always; meta.columns can add more). */
 const NEEDS_DONE_WHEN = ['todo', 'doing'];
-/** Columns whose cards are finished (no overdue warnings). */
+/** Columns whose cards are finished: no overdue warnings (always; meta.columns can add more). */
 const CLOSED_COLUMNS = ['done', 'dropped'];
+/** Colours a column can have in meta.columns; every app style draws them in its own palette. */
+const COLUMN_COLORS = ['grey', 'violet', 'blue', 'green', 'yellow', 'orange', 'red', 'pink'];
+/** Settings of one column in meta.columns.<id>, in canonical order. */
+const COLUMN_KEYS = ['label', 'color', 'wip', 'done_when', 'closed'];
 
 const TOP_KEYS = ['format', 'version', 'meta', 'columns', 'cards'];
-const META_KEYS = ['title', 'id_prefix', 'updated'];
+// New keys go at the end: a file written by this version stays canonical for older
+// ones, which keep unknown keys after the known ones in their original order.
+const META_KEYS = ['title', 'id_prefix', 'updated', 'owners', 'goals', 'columns'];
 const CARD_KEYS = ['id', 'title', 'column', 'order', 'priority', 'size', 'owner', 'goal', 'done_when', 'notes', 'tags', 'due', 'updated', 'updated_by'];
 /** Card fields a person or agent edits as text (everything but id / column / order / bookkeeping). */
 const EDITABLE_KEYS = ['title', 'priority', 'size', 'owner', 'goal', 'done_when', 'notes', 'tags', 'due'];
@@ -57,6 +63,38 @@ function isDate(s) {
   const [y, m, d] = s.split('-').map(Number);
   const dt = new Date(Date.UTC(y, m - 1, d));
   return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d;
+}
+
+// ---- board settings (meta) ----------------------------------------------------
+// Everything here is optional and only adds to the built-in behaviour, so a file
+// that uses it still works with older tools, which keep the keys as they are.
+
+/**
+ * Settings of one column from meta.columns.<id>: { label, color, wip, done_when, closed }.
+ * Wrong values are left out (validate warns about them); {} when there are none.
+ */
+function columnConf(doc, column) {
+  const all = doc?.meta?.columns;
+  const raw = isObj(all) && Object.hasOwn(all, column) && isObj(all[column]) ? all[column] : {};
+  const conf = {};
+  if (typeof raw.label === 'string' && raw.label.trim()) conf.label = raw.label.trim();
+  if (COLUMN_COLORS.includes(raw.color)) conf.color = raw.color;
+  if (Number.isInteger(raw.wip) && raw.wip > 0) conf.wip = raw.wip;
+  if (raw.done_when === true) conf.done_when = true;
+  if (raw.closed === true) conf.closed = true;
+  return conf;
+}
+
+/** Cards here must have done_when: todo and doing always, other columns when meta.columns says so. */
+const needsDoneWhen = (doc, column) => NEEDS_DONE_WHEN.includes(column) || columnConf(doc, column).done_when === true;
+
+/** Cards here are finished (no overdue warnings): done and dropped always, others when meta.columns says so. */
+const isClosed = (doc, column) => CLOSED_COLUMNS.includes(column) || columnConf(doc, column).closed === true;
+
+/** meta.owners / meta.goals: suggestions for the free-text owner and goal fields. */
+function metaList(doc, key) {
+  const v = doc?.meta?.[key];
+  return Array.isArray(v) ? [...new Set(v.filter((x) => typeof x === 'string' && x.trim()).map((x) => x.trim()))] : [];
 }
 
 /** A fresh board. */
@@ -122,10 +160,20 @@ const MESSAGES = {
     string: 'card {id}: {key} must be a string',
     date: '{where}{key} must be a date YYYY-MM-DD (got "{value}")',
     tags: 'card {id}: tags must be an array of strings',
-    done_when: 'card {id} is in "{value}" but has no done_when (required for todo and doing)',
+    done_when: 'card {id} is in "{value}" but has no done_when (required in todo, doing and columns with meta.columns.<id>.done_when)',
     unknown_field: 'card {id}: unknown field "{key}" (kept as is; custom fields should start with x_)',
     unknown_top: 'unknown top-level field "{key}" (kept as is; custom fields should start with x_)',
     unknown_meta: 'unknown field meta.{key} (kept as is; custom fields should start with x_)',
+    meta_list: 'meta.{key} must be a list of strings (ignored)',
+    mcol: 'meta.columns must be an object: column id → settings (ignored)',
+    mcol_unknown: 'meta.columns.{column}: there is no column "{column}" (ignored)',
+    mcol_entry: 'meta.columns.{column} must be an object (ignored)',
+    mcol_label: 'meta.columns.{column}.label must be a string (ignored)',
+    mcol_color: 'meta.columns.{column}.color: unknown colour {value} (grey, violet, blue, green, yellow, orange, red, pink; ignored)',
+    mcol_wip: 'meta.columns.{column}.wip must be a whole number ≥ 1 (ignored)',
+    mcol_flag: 'meta.columns.{column}.{key} must be true or false (ignored)',
+    mcol_builtin: 'meta.columns.{column}.{key}: false has no effect, this rule is built into "{column}"',
+    mcol_key: 'meta.columns.{column}: unknown setting "{key}" (kept as is; custom settings should start with x_)',
   },
   ru: {
     not_object: 'доска должна быть JSON-объектом',
@@ -150,10 +198,20 @@ const MESSAGES = {
     string: 'карточка {id}: {key} должно быть строкой',
     date: '{where}{key} — дата в формате ГГГГ-ММ-ДД (сейчас "{value}")',
     tags: 'карточка {id}: tags — массив строк',
-    done_when: 'карточка {id} в колонке "{value}", но без done_when (обязателен для todo и doing)',
+    done_when: 'карточка {id} в колонке "{value}", но без done_when (обязателен в todo, doing и колонках с meta.columns.<id>.done_when)',
     unknown_field: 'карточка {id}: неизвестное поле "{key}" (сохранено как есть; свои поля — с префиксом x_)',
     unknown_top: 'неизвестное поле верхнего уровня "{key}" (сохранено; свои поля — с префиксом x_)',
     unknown_meta: 'неизвестное поле meta.{key} (сохранено; свои поля — с префиксом x_)',
+    meta_list: 'meta.{key} — список строк (не учтено)',
+    mcol: 'meta.columns — объект: id колонки → настройки (не учтено)',
+    mcol_unknown: 'meta.columns.{column}: колонки "{column}" нет (не учтено)',
+    mcol_entry: 'meta.columns.{column} должно быть объектом (не учтено)',
+    mcol_label: 'meta.columns.{column}.label должно быть строкой (не учтено)',
+    mcol_color: 'meta.columns.{column}.color: неизвестный цвет {value} (grey, violet, blue, green, yellow, orange, red, pink; не учтено)',
+    mcol_wip: 'meta.columns.{column}.wip — целое число ≥ 1 (не учтено)',
+    mcol_flag: 'meta.columns.{column}.{key} — true или false (не учтено)',
+    mcol_builtin: 'meta.columns.{column}.{key}: false ничего не меняет, это правило встроено в "{column}"',
+    mcol_key: 'meta.columns.{column}: неизвестная настройка "{key}" (сохранена; свои настройки — с префиксом x_)',
   },
 };
 
@@ -188,6 +246,10 @@ function validate(doc) {
       if (doc.meta[k] !== undefined && typeof doc.meta[k] !== 'string') err('meta_string', `meta.${k}`, { key: k });
     }
     if (doc.meta.updated !== undefined && !isDate(doc.meta.updated)) err('date', 'meta.updated', { where: 'meta.', key: 'updated', value: doc.meta.updated });
+    for (const k of ['owners', 'goals']) {
+      const v = doc.meta[k];
+      if (v !== undefined && !(Array.isArray(v) && v.every((x) => typeof x === 'string'))) warn('meta_list', `meta.${k}`, { key: k });
+    }
     for (const k of Object.keys(doc.meta)) if (!META_KEYS.includes(k) && !k.startsWith('x_')) warn('unknown_meta', `meta.${k}`, { key: k });
   }
 
@@ -202,6 +264,8 @@ function validate(doc) {
       seen.add(c);
     }
   }
+
+  if (isObj(doc.meta) && doc.meta.columns !== undefined) checkColumnConf(doc.meta.columns, columns, warn);
 
   if (!Array.isArray(doc.cards)) {
     err('cards', 'cards');
@@ -230,7 +294,7 @@ function validate(doc) {
       if (c[k] !== undefined && !isDate(c[k])) err('date', `${p}.${k}`, { where: `${id}: `, key: k, value: c[k] });
     }
     if (c.tags !== undefined && (!Array.isArray(c.tags) || c.tags.some((t) => typeof t !== 'string'))) err('tags', `${p}.tags`, { id });
-    if (NEEDS_DONE_WHEN.includes(c.column) && !(typeof c.done_when === 'string' && c.done_when.trim())) {
+    if (needsDoneWhen(doc, c.column) && !(typeof c.done_when === 'string' && c.done_when.trim())) {
       err('done_when', `${p}.done_when`, { id, value: c.column });
     }
     for (const k of Object.keys(c)) if (!CARD_KEYS.includes(k) && !k.startsWith('x_')) warn('unknown_field', `${p}.${k}`, { id, key: k });
@@ -240,9 +304,31 @@ function validate(doc) {
   return { ok: errors.length === 0, errors, warnings };
 }
 
+/**
+ * meta.columns only changes how columns look and adds rules, so its problems are
+ * warnings: a wrong setting is ignored, the board stays writable.
+ */
+function checkColumnConf(all, columns, warn) {
+  if (!isObj(all)) { warn('mcol', 'meta.columns'); return; }
+  for (const [column, conf] of Object.entries(all)) {
+    const p = `meta.columns.${column}`;
+    if (columns.length && !columns.includes(column)) warn('mcol_unknown', p, { column });
+    if (!isObj(conf)) { warn('mcol_entry', p, { column }); continue; }
+    if (conf.label !== undefined && typeof conf.label !== 'string') warn('mcol_label', `${p}.label`, { column });
+    if (conf.color !== undefined && !COLUMN_COLORS.includes(conf.color)) warn('mcol_color', `${p}.color`, { column, value: JSON.stringify(conf.color) });
+    if (conf.wip !== undefined && !(Number.isInteger(conf.wip) && conf.wip > 0)) warn('mcol_wip', `${p}.wip`, { column });
+    for (const k of ['done_when', 'closed']) {
+      if (conf[k] !== undefined && typeof conf[k] !== 'boolean') warn('mcol_flag', `${p}.${k}`, { column, key: k });
+    }
+    if (conf.done_when === false && NEEDS_DONE_WHEN.includes(column)) warn('mcol_builtin', `${p}.done_when`, { column, key: 'done_when' });
+    if (conf.closed === false && CLOSED_COLUMNS.includes(column)) warn('mcol_builtin', `${p}.closed`, { column, key: 'closed' });
+    for (const k of Object.keys(conf)) if (!COLUMN_KEYS.includes(k) && !k.startsWith('x_')) warn('mcol_key', `${p}.${k}`, { column, key: k });
+  }
+}
+
 // ---- canonical form ----------------------------------------------------------
 
-const empty = (v) => v === undefined || v === null || v === '' || (Array.isArray(v) && v.length === 0);
+const empty = (v) => v === undefined || v === null || v === '' || (Array.isArray(v) && v.length === 0) || (isObj(v) && !Object.keys(v).length);
 
 /** Known keys in their fixed order, then the rest (x_ and unknown) in their original order. */
 function orderKeys(obj, known, dropEmpty) {
@@ -448,6 +534,76 @@ function removeCard(doc, id) {
   renumber(cardsIn(doc, card.column));
   return card;
 }
+
+// ---- columns ------------------------------------------------------------------
+// Column ids never change once created: cards, CLI calls and documents refer to
+// them. What a person sees and renames is meta.columns.<id>.label.
+
+/**
+ * Replace a column's settings: { label, color, wip, done_when, closed }. Empty or
+ * wrong values remove a setting; x_ and unknown settings already there are kept;
+ * an entry with nothing left is removed. meta.columns follows the column order.
+ */
+function setColumnConf(doc, column, conf = {}) {
+  if (!isObj(doc.meta)) doc.meta = {};
+  const all = isObj(doc.meta.columns) ? doc.meta.columns : {};
+  const old = isObj(all[column]) ? all[column] : {};
+  const known = {
+    label: typeof conf.label === 'string' && conf.label.trim() ? conf.label.trim() : undefined,
+    color: COLUMN_COLORS.includes(conf.color) ? conf.color : undefined,
+    wip: Number.isInteger(conf.wip) && conf.wip > 0 ? conf.wip : undefined,
+    done_when: conf.done_when === true ? true : undefined,
+    closed: conf.closed === true ? true : undefined,
+  };
+  const entry = {};
+  for (const k of COLUMN_KEYS) if (known[k] !== undefined) entry[k] = known[k];
+  for (const [k, v] of Object.entries(old)) if (!COLUMN_KEYS.includes(k)) entry[k] = v;
+  sortColumnConf(doc, { ...all, [column]: entry });
+}
+
+/** meta.columns in column order (entries for unknown ids last), without empty entries. */
+function sortColumnConf(doc, all) {
+  const next = {};
+  const ids = [...doc.columns, ...Object.keys(all).filter((k) => !doc.columns.includes(k))];
+  for (const k of ids) if (Object.hasOwn(all, k) && !empty(all[k])) next[k] = all[k];
+  if (Object.keys(next).length) doc.meta.columns = next;
+  else delete doc.meta.columns;
+}
+
+/** Add a column at `index` (default: last) with optional settings. Returns the id. */
+function addColumn(doc, id, { index, ...conf } = {}) {
+  const col = String(id ?? '').trim();
+  if (!ID_RE.test(col)) throw new Error(`bad column id "${col}" (letters, digits, "_", "." and "-")`);
+  if (doc.columns.includes(col)) throw new Error(`column "${col}" already exists`);
+  const at = Number.isInteger(index) && index >= 0 && index <= doc.columns.length ? index : doc.columns.length;
+  doc.columns.splice(at, 0, col);
+  setColumnConf(doc, col, conf);
+  return col;
+}
+
+/** Move a column to `index` among the columns. */
+function moveColumn(doc, id, index) {
+  if (!doc.columns.includes(id)) throw new Error(`no column "${id}"`);
+  const rest = doc.columns.filter((c) => c !== id);
+  const at = Number.isInteger(index) && index >= 0 && index <= rest.length ? index : rest.length;
+  rest.splice(at, 0, id);
+  doc.columns = rest;
+  if (isObj(doc.meta) && isObj(doc.meta.columns)) sortColumnConf(doc, doc.meta.columns);
+}
+
+/** Remove an empty column and its settings; refuses when cards are in it or it is the last one. */
+function removeColumn(doc, id) {
+  if (!doc.columns.includes(id)) throw new Error(`no column "${id}"`);
+  if (doc.columns.length === 1) throw new Error('a board needs at least one column');
+  const n = doc.cards.filter((c) => c?.column === id).length;
+  if (n) throw new Error(`column "${id}" is not empty (${n} cards)`);
+  doc.columns = doc.columns.filter((c) => c !== id);
+  if (isObj(doc.meta) && isObj(doc.meta.columns)) {
+    const rest = { ...doc.meta.columns };
+    delete rest[id];
+    sortColumnConf(doc, rest);
+  }
+}
 return {
   FORMAT,
   VERSION,
@@ -457,6 +613,8 @@ return {
   UPDATED_BY,
   NEEDS_DONE_WHEN,
   CLOSED_COLUMNS,
+  COLUMN_COLORS,
+  COLUMN_KEYS,
   TOP_KEYS,
   META_KEYS,
   CARD_KEYS,
@@ -464,6 +622,10 @@ return {
   ID_RE,
   today,
   isDate,
+  columnConf,
+  needsDoneWhen,
+  isClosed,
+  metaList,
   emptyBoard,
   parse,
   normalize,
@@ -481,12 +643,16 @@ return {
   setFields,
   addCard,
   removeCard,
+  setColumnConf,
+  addColumn,
+  moveColumn,
+  removeColumn,
 };
 })();
 
 // ---- src/core/text.js --------------------------------------------------------
 const __iluboard_src_core_text = (() => {
-const { CLOSED_COLUMNS, cardsIn } = __iluboard_src_core_model;
+const { cardsIn, columnConf, isClosed } = __iluboard_src_core_model;
 // The board in words: `text` (one line per card, for agents) and `md`
 // (Markdown tables, e.g. for backlog.md). Pure module.
 
@@ -519,7 +685,9 @@ function plural(n, one, few, many) {
 }
 
 const words = (lang) => WORDS[lang] || WORDS.en;
-const columnLabel = (column, lang = 'ru') => (COLUMN_LABELS[lang] || COLUMN_LABELS.en)[column] || column;
+/** A column's name: meta.columns.<id>.label when the board has one, else the standard name, else the id. */
+const columnLabel = (column, lang = 'ru', doc = null) => columnConf(doc, column).label
+  || (COLUMN_LABELS[lang] || COLUMN_LABELS.en)[column] || column;
 
 /** "B8 [P0/M] max — Title (до 2026-10-12)" */
 function cardLine(card, lang = 'ru') {
@@ -550,7 +718,7 @@ function boardText(doc, { lang = 'ru', full = false, columns } = {}) {
   out.push(`# ${title} — ${w.cards(doc.cards.length)}${upd}`);
   for (const col of pickColumns(doc, columns)) {
     const list = cardsIn(doc, col);
-    out.push('', `## ${columnLabel(col, lang)} (${col}) — ${list.length}`);
+    out.push('', `## ${columnLabel(col, lang, doc)} (${col}) — ${list.length}`);
     if (!list.length) out.push(w.empty);
     for (const c of list) {
       out.push(`- ${cardLine(c, lang)}`);
@@ -581,9 +749,9 @@ function boardMarkdown(doc, { lang = 'ru', columns, source = 'board.json' } = {}
   out.push(`> ${w.exported}: \`${source}\`${doc.meta?.updated ? ` · ${w.updated} ${doc.meta.updated}` : ''} · ${w.noEdit} (\`node iluboard.mjs md ${source}\`)`);
   for (const col of pickColumns(doc, columns)) {
     const list = cardsIn(doc, col);
-    out.push('', `## ${capital(columnLabel(col, lang))} · ${list.length}`, '');
+    out.push('', `## ${capital(columnLabel(col, lang, doc))} · ${list.length}`, '');
     if (!list.length) { out.push(`_${w.empty}_`); continue; }
-    const closed = CLOSED_COLUMNS.includes(col);
+    const closed = isClosed(doc, col);
     out.push(`| id | ${w.task} | P | ${w.size} | ${w.owner} | ${capital(w.goal)} | ${capital(w.doneWhen)} | ${w.due2} |`);
     out.push('|---|---|---|---|---|---|---|---|');
     for (const c of list) {
@@ -608,7 +776,7 @@ return {
 
 // ---- src/core/diff.js --------------------------------------------------------
 const __iluboard_src_core_diff = (() => {
-const { CARD_KEYS, cardsIn } = __iluboard_src_core_model;
+const { CARD_KEYS, cardsIn, columnConf } = __iluboard_src_core_model;
 const { columnLabel, cardLine } = __iluboard_src_core_text;
 // What changed between two versions of a board: cards moved between columns,
 // added, removed, edited; columns reordered inside; meta and columns changes.
@@ -625,7 +793,8 @@ const cardsOf = (doc) => (Array.isArray(doc?.cards) ? doc.cards.filter((c) => c 
  * Compare boards `a` (before) and `b` (after).
  * { moved: [{id, title, from, to, by}], added: [card], removed: [card],
  *   changed: [{id, title, by, fields: [{key, from, to}]}], reordered: [column],
- *   meta: [{key, from, to}], columns: {from, to} | null, empty: boolean }
+ *   meta: [{key, from, to}], columns: {from, to} | null, empty: boolean,
+ *   labels: {column: name} — the boards' own column names (meta.columns), for diffText }
  */
 function diffBoards(a, b) {
   const before = new Map(cardsOf(a).map((c) => [c.id, c]));
@@ -666,7 +835,14 @@ function diffBoards(a, b) {
   const columns = same(a?.columns, b?.columns) ? null : { from: a?.columns, to: b?.columns };
 
   const empty = !moved.length && !added.length && !removed.length && !changed.length && !reordered.length && !meta.length && !columns;
-  return { moved, added, removed, changed, reordered, meta, columns, empty };
+  const labels = {};
+  for (const doc of [a, b]) {
+    for (const col of Array.isArray(doc?.columns) ? doc.columns : []) {
+      const label = columnConf(doc, col).label;
+      if (label) labels[col] = label;
+    }
+  }
+  return { moved, added, removed, changed, reordered, meta, columns, empty, labels };
 }
 
 function safeCardsIn(doc, col) {
@@ -702,7 +878,7 @@ function diffText(d, { lang = 'ru' } = {}) {
     if (out.length) out.push('');
     out.push(`## ${title} (${lines.length})`, '', ...lines);
   };
-  const col = (c) => columnLabel(c, lang);
+  const col = (c) => d.labels?.[c] || columnLabel(c, lang);
   const by = (x) => (x ? ` · ${x}` : '');
   section(w.moved, d.moved.map((m) => `- ${m.id} ${m.title}: ${col(m.from)} → ${col(m.to)}${by(m.by)}`));
   section(w.added, d.added.map((c) => `- ${cardLine(c, lang)} — ${w.in} «${col(c.column)}»${by(c.updated_by)}`));
@@ -777,7 +953,8 @@ Options
   --version, --help
 
 Unknown options, extra arguments and bad values are errors (exit 2); nothing is ignored silently.
-Columns: idea, todo, doing, done, dropped (from the file). todo and doing need done_when.
+Columns come from the file (standard: idea, todo, doing, done, dropped). todo, doing and
+columns with "done_when": true in meta.columns need done_when (see FORMAT.md).
 Docs: https://ilumetric.github.io/IluBoard/docs/AGENT.md
 `;
 
@@ -860,6 +1037,19 @@ function readBoard(file) {
   try { return { text, doc: normalize(text) }; } catch (e) { throw new UsageError(`${file}: ${e.message}`); }
 }
 
+const CLI_URL = 'https://ilumetric.github.io/IluBoard/iluboard.mjs';
+// Errors a newer IluBoard could cause in an older CLI: a value or format version it does not know yet.
+const NEWER_CODES = new Set(['version', 'priority', 'size', 'updated_by']);
+const NEWER_HINT = {
+  ru: `подсказка: возможно, файл записан более новой версией IluBoard — обновите CLI: curl -O ${CLI_URL}`,
+  en: `hint: the file may come from a newer IluBoard — update the CLI: curl -O ${CLI_URL}`,
+};
+const UNKNOWN_HINT = {
+  ru: `подсказка: неизвестные поля сохраняются как есть; если их добавила более новая версия IluBoard, обновите CLI: curl -O ${CLI_URL}`,
+  en: `hint: unknown fields are kept as they are; if a newer IluBoard added them, update the CLI: curl -O ${CLI_URL}`,
+};
+const newerHint = (issues, lang) => (issues.some((e) => NEWER_CODES.has(e.code)) ? (NEWER_HINT[lang] || NEWER_HINT.en) : null);
+
 /** Validate and write atomically; returns false (and prints why) when invalid. */
 function writeBoard(file, doc, lang, { touchMeta = true } = {}) {
   if (touchMeta && doc.meta && typeof doc.meta === 'object') doc.meta.updated = today();
@@ -867,6 +1057,8 @@ function writeBoard(file, doc, lang, { touchMeta = true } = {}) {
   if (!v.ok) {
     err(`${file}: not written — the board would be invalid:`);
     for (const e of v.errors) err(`  error: ${issueText(e, lang)}`);
+    const hint = newerHint(v.errors, lang);
+    if (hint) err(hint);
     return false;
   }
   const tmp = `${file}.${process.pid}.tmp`;
@@ -920,6 +1112,8 @@ const COMMANDS = {
     }
     for (const e of v.errors) out(`error: ${issueText(e, lang)}  [${e.path}]`);
     for (const w of v.warnings) out(`warning: ${issueText(w, lang)}  [${w.path}]`);
+    const hint = newerHint(v.errors, lang) || (v.warnings.some((w) => w.code.startsWith('unknown_') || w.code === 'mcol_key') ? (UNKNOWN_HINT[lang] || UNKNOWN_HINT.en) : null);
+    if (hint) out(hint);
     out(v.ok ? `${file}: ok (${doc.cards.length} cards${v.warnings.length ? `, ${v.warnings.length} warnings` : ''})` : `${file}: ${v.errors.length} error(s)`);
     return v.ok ? 0 : 1;
   },
@@ -968,7 +1162,7 @@ const COMMANDS = {
     if (opt.done_when !== undefined) setFields(doc, id, { done_when: String(opt.done_when) }, { by });
     const card = moveCard(doc, id, column, indexOpt(opt), { by });
     if (!writeBoard(file, doc, lang)) return 1;
-    out(`${card.id} → ${column} (${columnLabel(column, lang)}), position ${card.order}`);
+    out(`${card.id} → ${column} (${columnLabel(column, lang, doc)}), position ${card.order}`);
     return 0;
   },
 
@@ -982,7 +1176,7 @@ const COMMANDS = {
       card = addCard(doc, { ...fields, id: opt.id, column: opt.column }, { by, index: indexOpt(opt) });
     } catch (e) { throw new UsageError(e.message); }
     if (!writeBoard(file, doc, lang)) return 1;
-    out(`added ${card.id} → ${card.column} (${columnLabel(card.column, lang)})`);
+    out(`added ${card.id} → ${card.column} (${columnLabel(card.column, lang, doc)})`);
     return 0;
   },
 

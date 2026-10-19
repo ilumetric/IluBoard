@@ -8,13 +8,19 @@ export const DEFAULT_COLUMNS = ['idea', 'todo', 'doing', 'done', 'dropped'];
 export const PRIORITIES = ['P0', 'P1', 'P2', 'P3'];
 export const SIZES = ['S', 'M', 'L', 'XL'];
 export const UPDATED_BY = ['human', 'agent'];
-/** Columns whose cards must say when they are done. */
+/** Columns whose cards must say when they are done (always; meta.columns can add more). */
 export const NEEDS_DONE_WHEN = ['todo', 'doing'];
-/** Columns whose cards are finished (no overdue warnings). */
+/** Columns whose cards are finished: no overdue warnings (always; meta.columns can add more). */
 export const CLOSED_COLUMNS = ['done', 'dropped'];
+/** Colours a column can have in meta.columns; every app style draws them in its own palette. */
+export const COLUMN_COLORS = ['grey', 'violet', 'blue', 'green', 'yellow', 'orange', 'red', 'pink'];
+/** Settings of one column in meta.columns.<id>, in canonical order. */
+export const COLUMN_KEYS = ['label', 'color', 'wip', 'done_when', 'closed'];
 
 export const TOP_KEYS = ['format', 'version', 'meta', 'columns', 'cards'];
-export const META_KEYS = ['title', 'id_prefix', 'updated'];
+// New keys go at the end: a file written by this version stays canonical for older
+// ones, which keep unknown keys after the known ones in their original order.
+export const META_KEYS = ['title', 'id_prefix', 'updated', 'owners', 'goals', 'columns'];
 export const CARD_KEYS = ['id', 'title', 'column', 'order', 'priority', 'size', 'owner', 'goal', 'done_when', 'notes', 'tags', 'due', 'updated', 'updated_by'];
 /** Card fields a person or agent edits as text (everything but id / column / order / bookkeeping). */
 export const EDITABLE_KEYS = ['title', 'priority', 'size', 'owner', 'goal', 'done_when', 'notes', 'tags', 'due'];
@@ -36,6 +42,38 @@ export function isDate(s) {
   const [y, m, d] = s.split('-').map(Number);
   const dt = new Date(Date.UTC(y, m - 1, d));
   return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d;
+}
+
+// ---- board settings (meta) ----------------------------------------------------
+// Everything here is optional and only adds to the built-in behaviour, so a file
+// that uses it still works with older tools, which keep the keys as they are.
+
+/**
+ * Settings of one column from meta.columns.<id>: { label, color, wip, done_when, closed }.
+ * Wrong values are left out (validate warns about them); {} when there are none.
+ */
+export function columnConf(doc, column) {
+  const all = doc?.meta?.columns;
+  const raw = isObj(all) && Object.hasOwn(all, column) && isObj(all[column]) ? all[column] : {};
+  const conf = {};
+  if (typeof raw.label === 'string' && raw.label.trim()) conf.label = raw.label.trim();
+  if (COLUMN_COLORS.includes(raw.color)) conf.color = raw.color;
+  if (Number.isInteger(raw.wip) && raw.wip > 0) conf.wip = raw.wip;
+  if (raw.done_when === true) conf.done_when = true;
+  if (raw.closed === true) conf.closed = true;
+  return conf;
+}
+
+/** Cards here must have done_when: todo and doing always, other columns when meta.columns says so. */
+export const needsDoneWhen = (doc, column) => NEEDS_DONE_WHEN.includes(column) || columnConf(doc, column).done_when === true;
+
+/** Cards here are finished (no overdue warnings): done and dropped always, others when meta.columns says so. */
+export const isClosed = (doc, column) => CLOSED_COLUMNS.includes(column) || columnConf(doc, column).closed === true;
+
+/** meta.owners / meta.goals: suggestions for the free-text owner and goal fields. */
+export function metaList(doc, key) {
+  const v = doc?.meta?.[key];
+  return Array.isArray(v) ? [...new Set(v.filter((x) => typeof x === 'string' && x.trim()).map((x) => x.trim()))] : [];
 }
 
 /** A fresh board. */
@@ -101,10 +139,20 @@ export const MESSAGES = {
     string: 'card {id}: {key} must be a string',
     date: '{where}{key} must be a date YYYY-MM-DD (got "{value}")',
     tags: 'card {id}: tags must be an array of strings',
-    done_when: 'card {id} is in "{value}" but has no done_when (required for todo and doing)',
+    done_when: 'card {id} is in "{value}" but has no done_when (required in todo, doing and columns with meta.columns.<id>.done_when)',
     unknown_field: 'card {id}: unknown field "{key}" (kept as is; custom fields should start with x_)',
     unknown_top: 'unknown top-level field "{key}" (kept as is; custom fields should start with x_)',
     unknown_meta: 'unknown field meta.{key} (kept as is; custom fields should start with x_)',
+    meta_list: 'meta.{key} must be a list of strings (ignored)',
+    mcol: 'meta.columns must be an object: column id → settings (ignored)',
+    mcol_unknown: 'meta.columns.{column}: there is no column "{column}" (ignored)',
+    mcol_entry: 'meta.columns.{column} must be an object (ignored)',
+    mcol_label: 'meta.columns.{column}.label must be a string (ignored)',
+    mcol_color: 'meta.columns.{column}.color: unknown colour {value} (grey, violet, blue, green, yellow, orange, red, pink; ignored)',
+    mcol_wip: 'meta.columns.{column}.wip must be a whole number ≥ 1 (ignored)',
+    mcol_flag: 'meta.columns.{column}.{key} must be true or false (ignored)',
+    mcol_builtin: 'meta.columns.{column}.{key}: false has no effect, this rule is built into "{column}"',
+    mcol_key: 'meta.columns.{column}: unknown setting "{key}" (kept as is; custom settings should start with x_)',
   },
   ru: {
     not_object: 'доска должна быть JSON-объектом',
@@ -129,10 +177,20 @@ export const MESSAGES = {
     string: 'карточка {id}: {key} должно быть строкой',
     date: '{where}{key} — дата в формате ГГГГ-ММ-ДД (сейчас "{value}")',
     tags: 'карточка {id}: tags — массив строк',
-    done_when: 'карточка {id} в колонке "{value}", но без done_when (обязателен для todo и doing)',
+    done_when: 'карточка {id} в колонке "{value}", но без done_when (обязателен в todo, doing и колонках с meta.columns.<id>.done_when)',
     unknown_field: 'карточка {id}: неизвестное поле "{key}" (сохранено как есть; свои поля — с префиксом x_)',
     unknown_top: 'неизвестное поле верхнего уровня "{key}" (сохранено; свои поля — с префиксом x_)',
     unknown_meta: 'неизвестное поле meta.{key} (сохранено; свои поля — с префиксом x_)',
+    meta_list: 'meta.{key} — список строк (не учтено)',
+    mcol: 'meta.columns — объект: id колонки → настройки (не учтено)',
+    mcol_unknown: 'meta.columns.{column}: колонки "{column}" нет (не учтено)',
+    mcol_entry: 'meta.columns.{column} должно быть объектом (не учтено)',
+    mcol_label: 'meta.columns.{column}.label должно быть строкой (не учтено)',
+    mcol_color: 'meta.columns.{column}.color: неизвестный цвет {value} (grey, violet, blue, green, yellow, orange, red, pink; не учтено)',
+    mcol_wip: 'meta.columns.{column}.wip — целое число ≥ 1 (не учтено)',
+    mcol_flag: 'meta.columns.{column}.{key} — true или false (не учтено)',
+    mcol_builtin: 'meta.columns.{column}.{key}: false ничего не меняет, это правило встроено в "{column}"',
+    mcol_key: 'meta.columns.{column}: неизвестная настройка "{key}" (сохранена; свои настройки — с префиксом x_)',
   },
 };
 
@@ -167,6 +225,10 @@ export function validate(doc) {
       if (doc.meta[k] !== undefined && typeof doc.meta[k] !== 'string') err('meta_string', `meta.${k}`, { key: k });
     }
     if (doc.meta.updated !== undefined && !isDate(doc.meta.updated)) err('date', 'meta.updated', { where: 'meta.', key: 'updated', value: doc.meta.updated });
+    for (const k of ['owners', 'goals']) {
+      const v = doc.meta[k];
+      if (v !== undefined && !(Array.isArray(v) && v.every((x) => typeof x === 'string'))) warn('meta_list', `meta.${k}`, { key: k });
+    }
     for (const k of Object.keys(doc.meta)) if (!META_KEYS.includes(k) && !k.startsWith('x_')) warn('unknown_meta', `meta.${k}`, { key: k });
   }
 
@@ -181,6 +243,8 @@ export function validate(doc) {
       seen.add(c);
     }
   }
+
+  if (isObj(doc.meta) && doc.meta.columns !== undefined) checkColumnConf(doc.meta.columns, columns, warn);
 
   if (!Array.isArray(doc.cards)) {
     err('cards', 'cards');
@@ -209,7 +273,7 @@ export function validate(doc) {
       if (c[k] !== undefined && !isDate(c[k])) err('date', `${p}.${k}`, { where: `${id}: `, key: k, value: c[k] });
     }
     if (c.tags !== undefined && (!Array.isArray(c.tags) || c.tags.some((t) => typeof t !== 'string'))) err('tags', `${p}.tags`, { id });
-    if (NEEDS_DONE_WHEN.includes(c.column) && !(typeof c.done_when === 'string' && c.done_when.trim())) {
+    if (needsDoneWhen(doc, c.column) && !(typeof c.done_when === 'string' && c.done_when.trim())) {
       err('done_when', `${p}.done_when`, { id, value: c.column });
     }
     for (const k of Object.keys(c)) if (!CARD_KEYS.includes(k) && !k.startsWith('x_')) warn('unknown_field', `${p}.${k}`, { id, key: k });
@@ -219,9 +283,31 @@ export function validate(doc) {
   return { ok: errors.length === 0, errors, warnings };
 }
 
+/**
+ * meta.columns only changes how columns look and adds rules, so its problems are
+ * warnings: a wrong setting is ignored, the board stays writable.
+ */
+function checkColumnConf(all, columns, warn) {
+  if (!isObj(all)) { warn('mcol', 'meta.columns'); return; }
+  for (const [column, conf] of Object.entries(all)) {
+    const p = `meta.columns.${column}`;
+    if (columns.length && !columns.includes(column)) warn('mcol_unknown', p, { column });
+    if (!isObj(conf)) { warn('mcol_entry', p, { column }); continue; }
+    if (conf.label !== undefined && typeof conf.label !== 'string') warn('mcol_label', `${p}.label`, { column });
+    if (conf.color !== undefined && !COLUMN_COLORS.includes(conf.color)) warn('mcol_color', `${p}.color`, { column, value: JSON.stringify(conf.color) });
+    if (conf.wip !== undefined && !(Number.isInteger(conf.wip) && conf.wip > 0)) warn('mcol_wip', `${p}.wip`, { column });
+    for (const k of ['done_when', 'closed']) {
+      if (conf[k] !== undefined && typeof conf[k] !== 'boolean') warn('mcol_flag', `${p}.${k}`, { column, key: k });
+    }
+    if (conf.done_when === false && NEEDS_DONE_WHEN.includes(column)) warn('mcol_builtin', `${p}.done_when`, { column, key: 'done_when' });
+    if (conf.closed === false && CLOSED_COLUMNS.includes(column)) warn('mcol_builtin', `${p}.closed`, { column, key: 'closed' });
+    for (const k of Object.keys(conf)) if (!COLUMN_KEYS.includes(k) && !k.startsWith('x_')) warn('mcol_key', `${p}.${k}`, { column, key: k });
+  }
+}
+
 // ---- canonical form ----------------------------------------------------------
 
-const empty = (v) => v === undefined || v === null || v === '' || (Array.isArray(v) && v.length === 0);
+const empty = (v) => v === undefined || v === null || v === '' || (Array.isArray(v) && v.length === 0) || (isObj(v) && !Object.keys(v).length);
 
 /** Known keys in their fixed order, then the rest (x_ and unknown) in their original order. */
 function orderKeys(obj, known, dropEmpty) {
@@ -426,4 +512,74 @@ export function removeCard(doc, id) {
   doc.cards.splice(doc.cards.indexOf(card), 1);
   renumber(cardsIn(doc, card.column));
   return card;
+}
+
+// ---- columns ------------------------------------------------------------------
+// Column ids never change once created: cards, CLI calls and documents refer to
+// them. What a person sees and renames is meta.columns.<id>.label.
+
+/**
+ * Replace a column's settings: { label, color, wip, done_when, closed }. Empty or
+ * wrong values remove a setting; x_ and unknown settings already there are kept;
+ * an entry with nothing left is removed. meta.columns follows the column order.
+ */
+export function setColumnConf(doc, column, conf = {}) {
+  if (!isObj(doc.meta)) doc.meta = {};
+  const all = isObj(doc.meta.columns) ? doc.meta.columns : {};
+  const old = isObj(all[column]) ? all[column] : {};
+  const known = {
+    label: typeof conf.label === 'string' && conf.label.trim() ? conf.label.trim() : undefined,
+    color: COLUMN_COLORS.includes(conf.color) ? conf.color : undefined,
+    wip: Number.isInteger(conf.wip) && conf.wip > 0 ? conf.wip : undefined,
+    done_when: conf.done_when === true ? true : undefined,
+    closed: conf.closed === true ? true : undefined,
+  };
+  const entry = {};
+  for (const k of COLUMN_KEYS) if (known[k] !== undefined) entry[k] = known[k];
+  for (const [k, v] of Object.entries(old)) if (!COLUMN_KEYS.includes(k)) entry[k] = v;
+  sortColumnConf(doc, { ...all, [column]: entry });
+}
+
+/** meta.columns in column order (entries for unknown ids last), without empty entries. */
+function sortColumnConf(doc, all) {
+  const next = {};
+  const ids = [...doc.columns, ...Object.keys(all).filter((k) => !doc.columns.includes(k))];
+  for (const k of ids) if (Object.hasOwn(all, k) && !empty(all[k])) next[k] = all[k];
+  if (Object.keys(next).length) doc.meta.columns = next;
+  else delete doc.meta.columns;
+}
+
+/** Add a column at `index` (default: last) with optional settings. Returns the id. */
+export function addColumn(doc, id, { index, ...conf } = {}) {
+  const col = String(id ?? '').trim();
+  if (!ID_RE.test(col)) throw new Error(`bad column id "${col}" (letters, digits, "_", "." and "-")`);
+  if (doc.columns.includes(col)) throw new Error(`column "${col}" already exists`);
+  const at = Number.isInteger(index) && index >= 0 && index <= doc.columns.length ? index : doc.columns.length;
+  doc.columns.splice(at, 0, col);
+  setColumnConf(doc, col, conf);
+  return col;
+}
+
+/** Move a column to `index` among the columns. */
+export function moveColumn(doc, id, index) {
+  if (!doc.columns.includes(id)) throw new Error(`no column "${id}"`);
+  const rest = doc.columns.filter((c) => c !== id);
+  const at = Number.isInteger(index) && index >= 0 && index <= rest.length ? index : rest.length;
+  rest.splice(at, 0, id);
+  doc.columns = rest;
+  if (isObj(doc.meta) && isObj(doc.meta.columns)) sortColumnConf(doc, doc.meta.columns);
+}
+
+/** Remove an empty column and its settings; refuses when cards are in it or it is the last one. */
+export function removeColumn(doc, id) {
+  if (!doc.columns.includes(id)) throw new Error(`no column "${id}"`);
+  if (doc.columns.length === 1) throw new Error('a board needs at least one column');
+  const n = doc.cards.filter((c) => c?.column === id).length;
+  if (n) throw new Error(`column "${id}" is not empty (${n} cards)`);
+  doc.columns = doc.columns.filter((c) => c !== id);
+  if (isObj(doc.meta) && isObj(doc.meta.columns)) {
+    const rest = { ...doc.meta.columns };
+    delete rest[id];
+    sortColumnConf(doc, rest);
+  }
 }

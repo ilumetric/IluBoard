@@ -24,7 +24,7 @@ node iluboard.mjs diff board.json --git
 ## Rules
 
 - Reference cards by id (`B8`); ids are unique and never change.
-- `column` is one of `columns` (idea, todo, doing, done, dropped). Cards in todo and doing need `done_when`.
+- `column` is one of `columns` (standard: idea, todo, doing, done, dropped; a board may add its own, named in `meta.columns`). Cards in todo, doing and columns with `"done_when": true` need `done_when`.
 - Start a session with `node iluboard.mjs diff board.json --git` to see what the human changed.
 - Re-read `board.json` right before editing; never write back a copy kept from an earlier turn. Prefer `move` / `add` / `set`; after hand edits run `fmt` and `validate`.
 - The CLI records `"updated_by": "agent"` and today's date on every card it changes.

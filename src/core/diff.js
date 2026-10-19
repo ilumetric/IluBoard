@@ -2,7 +2,7 @@
 // added, removed, edited; columns reordered inside; meta and columns changes.
 // Pure module.
 
-import { CARD_KEYS, cardsIn } from './model.js';
+import { CARD_KEYS, cardsIn, columnConf } from './model.js';
 import { columnLabel, cardLine } from './text.js';
 
 // `order` shows up as reordering; `updated` / `updated_by` change with every edit.
@@ -15,7 +15,8 @@ const cardsOf = (doc) => (Array.isArray(doc?.cards) ? doc.cards.filter((c) => c 
  * Compare boards `a` (before) and `b` (after).
  * { moved: [{id, title, from, to, by}], added: [card], removed: [card],
  *   changed: [{id, title, by, fields: [{key, from, to}]}], reordered: [column],
- *   meta: [{key, from, to}], columns: {from, to} | null, empty: boolean }
+ *   meta: [{key, from, to}], columns: {from, to} | null, empty: boolean,
+ *   labels: {column: name} — the boards' own column names (meta.columns), for diffText }
  */
 export function diffBoards(a, b) {
   const before = new Map(cardsOf(a).map((c) => [c.id, c]));
@@ -56,7 +57,14 @@ export function diffBoards(a, b) {
   const columns = same(a?.columns, b?.columns) ? null : { from: a?.columns, to: b?.columns };
 
   const empty = !moved.length && !added.length && !removed.length && !changed.length && !reordered.length && !meta.length && !columns;
-  return { moved, added, removed, changed, reordered, meta, columns, empty };
+  const labels = {};
+  for (const doc of [a, b]) {
+    for (const col of Array.isArray(doc?.columns) ? doc.columns : []) {
+      const label = columnConf(doc, col).label;
+      if (label) labels[col] = label;
+    }
+  }
+  return { moved, added, removed, changed, reordered, meta, columns, empty, labels };
 }
 
 function safeCardsIn(doc, col) {
@@ -92,7 +100,7 @@ export function diffText(d, { lang = 'ru' } = {}) {
     if (out.length) out.push('');
     out.push(`## ${title} (${lines.length})`, '', ...lines);
   };
-  const col = (c) => columnLabel(c, lang);
+  const col = (c) => d.labels?.[c] || columnLabel(c, lang);
   const by = (x) => (x ? ` · ${x}` : '');
   section(w.moved, d.moved.map((m) => `- ${m.id} ${m.title}: ${col(m.from)} → ${col(m.to)}${by(m.by)}`));
   section(w.added, d.added.map((c) => `- ${cardLine(c, lang)} — ${w.in} «${col(c.column)}»${by(c.updated_by)}`));

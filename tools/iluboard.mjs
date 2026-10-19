@@ -43,7 +43,8 @@ Options
   --version, --help
 
 Unknown options, extra arguments and bad values are errors (exit 2); nothing is ignored silently.
-Columns: idea, todo, doing, done, dropped (from the file). todo and doing need done_when.
+Columns come from the file (standard: idea, todo, doing, done, dropped). todo, doing and
+columns with "done_when": true in meta.columns need done_when (see FORMAT.md).
 Docs: https://ilumetric.github.io/IluBoard/docs/AGENT.md
 `;
 
@@ -126,6 +127,19 @@ function readBoard(file) {
   try { return { text, doc: normalize(text) }; } catch (e) { throw new UsageError(`${file}: ${e.message}`); }
 }
 
+const CLI_URL = 'https://ilumetric.github.io/IluBoard/iluboard.mjs';
+// Errors a newer IluBoard could cause in an older CLI: a value or format version it does not know yet.
+const NEWER_CODES = new Set(['version', 'priority', 'size', 'updated_by']);
+const NEWER_HINT = {
+  ru: `подсказка: возможно, файл записан более новой версией IluBoard — обновите CLI: curl -O ${CLI_URL}`,
+  en: `hint: the file may come from a newer IluBoard — update the CLI: curl -O ${CLI_URL}`,
+};
+const UNKNOWN_HINT = {
+  ru: `подсказка: неизвестные поля сохраняются как есть; если их добавила более новая версия IluBoard, обновите CLI: curl -O ${CLI_URL}`,
+  en: `hint: unknown fields are kept as they are; if a newer IluBoard added them, update the CLI: curl -O ${CLI_URL}`,
+};
+const newerHint = (issues, lang) => (issues.some((e) => NEWER_CODES.has(e.code)) ? (NEWER_HINT[lang] || NEWER_HINT.en) : null);
+
 /** Validate and write atomically; returns false (and prints why) when invalid. */
 function writeBoard(file, doc, lang, { touchMeta = true } = {}) {
   if (touchMeta && doc.meta && typeof doc.meta === 'object') doc.meta.updated = today();
@@ -133,6 +147,8 @@ function writeBoard(file, doc, lang, { touchMeta = true } = {}) {
   if (!v.ok) {
     err(`${file}: not written — the board would be invalid:`);
     for (const e of v.errors) err(`  error: ${issueText(e, lang)}`);
+    const hint = newerHint(v.errors, lang);
+    if (hint) err(hint);
     return false;
   }
   const tmp = `${file}.${process.pid}.tmp`;
@@ -186,6 +202,8 @@ const COMMANDS = {
     }
     for (const e of v.errors) out(`error: ${issueText(e, lang)}  [${e.path}]`);
     for (const w of v.warnings) out(`warning: ${issueText(w, lang)}  [${w.path}]`);
+    const hint = newerHint(v.errors, lang) || (v.warnings.some((w) => w.code.startsWith('unknown_') || w.code === 'mcol_key') ? (UNKNOWN_HINT[lang] || UNKNOWN_HINT.en) : null);
+    if (hint) out(hint);
     out(v.ok ? `${file}: ok (${doc.cards.length} cards${v.warnings.length ? `, ${v.warnings.length} warnings` : ''})` : `${file}: ${v.errors.length} error(s)`);
     return v.ok ? 0 : 1;
   },
@@ -234,7 +252,7 @@ const COMMANDS = {
     if (opt.done_when !== undefined) setFields(doc, id, { done_when: String(opt.done_when) }, { by });
     const card = moveCard(doc, id, column, indexOpt(opt), { by });
     if (!writeBoard(file, doc, lang)) return 1;
-    out(`${card.id} → ${column} (${columnLabel(column, lang)}), position ${card.order}`);
+    out(`${card.id} → ${column} (${columnLabel(column, lang, doc)}), position ${card.order}`);
     return 0;
   },
 
@@ -248,7 +266,7 @@ const COMMANDS = {
       card = addCard(doc, { ...fields, id: opt.id, column: opt.column }, { by, index: indexOpt(opt) });
     } catch (e) { throw new UsageError(e.message); }
     if (!writeBoard(file, doc, lang)) return 1;
-    out(`added ${card.id} → ${card.column} (${columnLabel(card.column, lang)})`);
+    out(`added ${card.id} → ${card.column} (${columnLabel(card.column, lang, doc)})`);
     return 0;
   },
 

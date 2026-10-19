@@ -1,11 +1,13 @@
 // IluBoard web app: state, rendering, drag and drop, card dialog, open / save,
 // watching the file on disk. The board lives only in board.json; the browser
-// keeps nothing but UI preferences (theme, language, collapsed columns) and
-// the list of recent file handles.
+// keeps nothing but UI preferences (language, collapsed columns) and the list
+// of recent file handles.
 
 import {
-  PRIORITIES, SIZES, NEEDS_DONE_WHEN, CLOSED_COLUMNS, ID_RE, emptyBoard, normalize, validate, issueText,
-  serialize, findCard, cardsIn, moveCard, addCard, setFields, removeCard, nextId, idPrefix, today,
+  PRIORITIES, SIZES, NEEDS_DONE_WHEN, CLOSED_COLUMNS, DEFAULT_COLUMNS, COLUMN_COLORS, CARD_KEYS, ID_RE,
+  emptyBoard, normalize, validate, issueText, serialize, findCard, cardsIn, moveCard, addCard, setFields,
+  removeCard, nextId, idPrefix, today, columnConf, needsDoneWhen, isClosed, metaList,
+  addColumn, moveColumn, removeColumn, setColumnConf,
 } from '../core/model.js';
 import { diffBoards, diffSummary, diffText } from '../core/diff.js';
 import { merge3 } from '../core/merge.js';
@@ -18,7 +20,6 @@ import * as disk from './disk.js';
 const $ = (id) => document.getElementById(id);
 const CLI_URL = 'https://ilumetric.github.io/IluBoard/iluboard.mjs';
 const REPO_URL = 'https://github.com/ilumetric/IluBoard';
-const DEFAULT_OWNERS = ['max', 'producer', 'narrative', 'design', 'code'];
 
 // ---- preferences (per browser, never board data) -------------------------------------
 
@@ -29,13 +30,15 @@ const pref = {
   setRaw(k, v) { try { localStorage.setItem(`iluboard.${k}`, v); } catch { /* storage disabled */ } },
 };
 
-const mq = matchMedia('(prefers-color-scheme: light)');
-function applyTheme() {
-  const p = pref.raw('theme', 'system');
-  const mode = p === 'system' ? (mq.matches ? 'light' : 'dark') : p;
-  document.documentElement.dataset.theme = mode === 'light' ? 'light' : 'dark';
+// Looks: colours, type, tilt, corners and the canvas pattern (styles.css, [data-style]).
+// index.html sets the saved one before the first paint.
+const STYLES = ['fun', 'calm', 'oli'];
+
+function applyStyle(v) {
+  const style = STYLES.includes(v) ? v : 'fun';
+  document.documentElement.dataset.style = style;
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', getComputedStyle(document.documentElement).getPropertyValue('--canvas').trim());
 }
-mq.addEventListener?.('change', applyTheme);
 
 // ---- state ------------------------------------------------------------------------------
 
@@ -418,7 +421,7 @@ function renderSidebar() {
     for (const col of S.doc.columns) {
       const n = cardsIn(S.doc, col).length;
       sec.append(h('button.side-row', { type: 'button', onclick: () => scrollToColumn(col) },
-        h(`span.col-dot.c-${col}`), h('span.grow.ellipsis', {}, colLabel(col)), h('span.side-count', {}, n)));
+        colDot(col), h('span.grow.ellipsis', {}, colName(col)), h('span.side-count', {}, n)));
     }
     const owners = ownersOf(S.doc);
     if (owners.length) {
@@ -436,8 +439,10 @@ function renderSidebar() {
   if (!recent.length) rec.append(h('div.side-hint', {}, t('side.recentEmpty')));
   for (const r of recent) {
     const active = S.source && S.source.kind === r.kind && S.source.path === r.path;
+    const name = r.title || r.path;
     const row = h(`div.side-row.recent${active ? '.active' : ''}`, { role: 'button', tabindex: 0, title: r.path },
-      h('span.grow.ellipsis', {}, h('span', {}, r.title || r.path), h('span.recent-path', {}, r.path)),
+      h('span.recent-ico', { style: { '--h': hue(name) }, 'aria-hidden': 'true' }, String(name).trim().charAt(0).toUpperCase() || '#'),
+      h('span.grow.ellipsis', {}, h('span', {}, name), h('span.recent-path', {}, r.path)),
       iconBtn('x', t('side.forget'), async (e) => { e.stopPropagation(); await disk.forget(r.key); refreshRecent(); }, 'tiny'));
     const go = async () => {
       if (active) return;
@@ -598,10 +603,13 @@ function renderColumns() {
     const all = cardsIn(S.doc, col);
     const shown = all.filter(matches);
     const collapsed = S.collapsed.has(col);
+    const { wip } = columnConf(S.doc, col);
+    const over = wip && all.length > wip;
+    const count = filtering() ? `${shown.length}/${all.length}` : wip ? `${all.length}/${wip}` : all.length;
+    const tag = [h('span.col-title', {}, colName(col)),
+      h(`span.col-count${over ? '.over' : ''}`, { title: wip ? t('col.wipTitle', { n: all.length, max: wip }) : null }, count)];
     const head = h('div.col-head', {},
-      h(`span.col-dot.c-${col}`),
-      h('span.col-title', {}, colLabel(col)),
-      h('span.col-count', {}, filtering() ? `${shown.length}/${all.length}` : all.length),
+      collapsed ? h('span.col-tag', {}, ...tag) : h('button.col-tag', { type: 'button', title: t('col.settings'), onclick: () => openColumnDialog(col) }, ...tag),
       h('span.grow'),
       iconBtn(collapsed ? 'expand' : 'collapse', collapsed ? t('col.expand') : t('col.collapse'), () => toggleCollapsed(col), 'tiny col-toggle'),
       collapsed ? null : iconBtn('plus', t('col.add'), () => newCardFromUi(col), 'tiny'));
@@ -609,11 +617,13 @@ function renderColumns() {
     for (const card of shown) list.append(cardNode(card, bad.has(card.id)));
     if (!shown.length) list.append(h('div.col-empty', {}, filtering() && all.length ? t('col.hidden', { n: all.length }) : t('col.empty')));
     else if (filtering() && shown.length < all.length) list.append(h('div.col-hidden', {}, t('col.hidden', { n: all.length - shown.length })));
-    const node = h(`section.col.c-${col}${collapsed ? '.collapsed' : ''}`, { dataset: { col }, role: 'listitem', 'aria-label': colLabel(col) }, head, list);
+    const node = h(`section.col${colCls(col)}${collapsed ? '.collapsed' : ''}`, { dataset: { col }, role: 'listitem', 'aria-label': colName(col), style: colStyle(col) }, head, list);
     if (collapsed) head.addEventListener('click', (e) => { if (!e.target.closest('button')) toggleCollapsed(col); });
     return node;
   });
-  board.replaceChildren(...cols);
+  const addCol = h('button.col-add', { type: 'button', title: t('col.new') }, icon('plus', 16), h('span', {}, t('col.addColumn')));
+  addCol.addEventListener('click', () => openColumnDialog(null));
+  board.replaceChildren(...cols, addCol);
   for (const l of board.querySelectorAll('.col-list')) if (scrolls[l.dataset.col]) l.scrollTop = scrolls[l.dataset.col];
   if (focusedId) board.querySelector(`.card[data-id="${CSS.escape(focusedId)}"]`)?.focus({ preventScroll: true });
 }
@@ -636,6 +646,20 @@ function hue(s) {
   return Math.round(((x % 1000) / 1000) * 360);
 }
 
+/** A column's name on this board (its meta.columns label, else the standard name). */
+const colName = (col) => colLabel(col, S.doc);
+
+/** `.c-idea` etc.: the standard columns' colours live in CSS; other ids get none (and may not be valid class names). */
+const colCls = (col) => (DEFAULT_COLUMNS.includes(col) ? `.c-${col}` : '');
+
+/** The colour set in meta.columns, as an inline --c that wins over the CSS default. */
+function colStyle(col) {
+  const { color } = columnConf(S.doc, col);
+  return color ? { '--c': `var(--${color})` } : undefined;
+}
+
+const colDot = (col) => h(`span.col-dot${colCls(col)}`, { style: colStyle(col) });
+
 function avatar(name) {
   return h('span.avatar', { style: { '--h': hue(name) }, 'aria-hidden': 'true' }, String(name).charAt(0).toUpperCase());
 }
@@ -655,7 +679,7 @@ function daysUntil(iso) {
 }
 
 function cardNode(c, invalid) {
-  const closed = CLOSED_COLUMNS.includes(c.column);
+  const closed = isClosed(S.doc, c.column);
   const cls = ['card', c.priority ? `p-${c.priority.toLowerCase()}` : '', closed ? 'closed' : '', c.column === 'dropped' ? 'dropped' : '', invalid ? 'invalid' : '', S.flash.has(c.id) ? 'flash' : ''].filter(Boolean).join('.');
   const top = h('div.card-top', {},
     h('span.card-id', {}, c.id),
@@ -676,7 +700,7 @@ function cardNode(c, invalid) {
     top,
     h('div.card-title', {}, c.title || '—'),
     meta.length ? h('div.card-meta', {}, ...meta) : null,
-    c.tags?.length ? h('div.card-tags', {}, ...c.tags.map((x) => h('span.tag', {}, `#${x}`))) : null);
+    c.tags?.length ? h('div.card-tags', {}, ...c.tags.map((x) => h('span.tag', { style: { '--h': hue(x) } }, `#${x}`))) : null);
   node.addEventListener('pointerdown', onCardPointerDown);
   node.addEventListener('click', () => { if (!suppressClick) openCardDialog(c.id); });
   node.addEventListener('keydown', onCardKey);
@@ -705,7 +729,7 @@ function renderComposer() {
     });
     send.addEventListener('click', () => { quickAdd(input.value, false); input.value = ''; autosize(); input.focus(); });
     colBtn.addEventListener('click', () => openMenu(colBtn, S.doc.columns.map((col) => ({
-      label: colLabel(col), checked: col === S.composerCol, onClick: () => { S.composerCol = col; pref.set('composerCol', col); renderComposer(); },
+      label: colName(col), checked: col === S.composerCol, onClick: () => { S.composerCol = col; pref.set('composerCol', col); renderComposer(); },
     })), { up: true }));
     S.ui.composer = h('div.composer', {}, colBtn, input, send);
     S.ui.composerInput = input;
@@ -714,14 +738,14 @@ function renderComposer() {
     autosize();
   }
   if (!S.doc.columns.includes(S.composerCol)) S.composerCol = S.doc.columns[0];
-  S.ui.composerCol.replaceChildren(icon('plus', 16), h('span', {}, `${t('composer.to')} `), h(`span.col-dot.c-${S.composerCol}`), h('b', {}, colLabel(S.composerCol)), icon('chevronDown', 14));
+  S.ui.composerCol.replaceChildren(icon('plus', 16), h('span', {}, `${t('composer.to')} `), colDot(S.composerCol), h('b', {}, colName(S.composerCol)), icon('chevronDown', 14));
 }
 
 function quickAdd(text, openAfter) {
   const title = text.trim().replace(/\s+/g, ' ');
   if (!title || !S.doc) return;
   const col = S.composerCol;
-  if (NEEDS_DONE_WHEN.includes(col) || openAfter) {
+  if (needsDoneWhen(S.doc, col) || openAfter) {
     openCardDialog(null, { preset: { title, column: col } });
     return;
   }
@@ -789,6 +813,7 @@ function dragStart(card, ev, start) {
   const ghost = card.cloneNode(true);
   ghost.classList.add('ghost');
   ghost.classList.remove('armed', 'flash');
+  ghost.style.setProperty('--c', getComputedStyle(card).getPropertyValue('--c')); // keeps its column's colour outside the column
   ghost.style.width = `${r.width}px`;
   document.body.append(ghost);
   const ph = h('div.placeholder', { style: { height: `${r.height}px` } });
@@ -804,7 +829,7 @@ function dragMove(ev) {
   const d = drag;
   d.x = ev.clientX;
   d.y = ev.clientY;
-  d.ghost.style.transform = `translate(${d.x - d.offX}px, ${d.y - d.offY}px) rotate(2.5deg)`;
+  d.ghost.style.transform = `translate(${d.x - d.offX}px, ${d.y - d.offY}px) rotate(3deg) scale(1.03)`;
   const el = document.elementFromPoint(d.x, d.y);
   const colNode = el?.closest?.('.col');
   document.querySelectorAll('.col.drop-over').forEach((n) => { if (n !== colNode) n.classList.remove('drop-over'); });
@@ -880,7 +905,7 @@ function moveTo(id, column, index) {
   const from = card.column;
   const depth = S.undo.length;
   commit((doc) => moveCard(doc, id, column, index, { by: 'human' }));
-  if (from !== column && NEEDS_DONE_WHEN.includes(column) && !(card.done_when || '').trim()) {
+  if (from !== column && needsDoneWhen(S.doc, column) && !(card.done_when || '').trim()) {
     openCardDialog(id, { requireDoneWhen: true, onCancel: () => { if (S.undo.length > depth) undo(); } });
   }
 }
@@ -970,22 +995,45 @@ function openCardDialog(id, { preset = {}, requireDoneWhen = false, onCancel } =
   };
   const clearErr = (k) => { if (errs[k]) errs[k].textContent = ''; };
 
-  const owners = [...new Set([...ownersOf(S.doc).map(([o]) => o), ...DEFAULT_OWNERS])];
-  const goals = [...new Set(S.doc.cards.map((c) => c.goal).filter(Boolean))].sort();
+  const owners = [...new Set([...metaList(S.doc, 'owners'), ...ownersOf(S.doc).map(([o]) => o)])];
+  const goals = [...new Set([...metaList(S.doc, 'goals'), ...S.doc.cards.map((c) => c.goal).filter(Boolean).sort()])];
   const dlOwners = h('datalist', { id: 'dl-owners' }, ...owners.map((o) => h('option', { value: o })));
   const dlGoals = h('datalist', { id: 'dl-goals' }, ...goals.map((o) => h('option', { value: o })));
 
   const titleEl = area('title', { rows: 1, placeholder: t('dlg.titlePh'), class: 'title-input' });
-  const colSel = h('select.input', {}, ...S.doc.columns.map((c) => h('option', { value: c, selected: c === f.column }, colLabel(c))));
+  const colSel = h('select.input', {}, ...S.doc.columns.map((c) => h('option', { value: c, selected: c === f.column }, colName(c))));
   const doneReq = h('span.req', {}, '*');
-  const paintReq = () => { doneReq.hidden = !NEEDS_DONE_WHEN.includes(f.column); };
+  const paintReq = () => { doneReq.hidden = !needsDoneWhen(S.doc, f.column); };
   colSel.addEventListener('change', () => { f.column = colSel.value; paintReq(); });
   paintReq();
   const doneEl = area('done_when', { placeholder: t('dlg.doneWhenPh') });
   const dueEl = input('due', { type: 'date' });
 
   const idEl = isNew ? input('id', { class: 'mono', spellcheck: false }) : null;
-  const extra = Object.keys(card || {}).filter((k) => k.startsWith('x_') || !['id', 'title', 'column', 'order', 'priority', 'size', 'owner', 'goal', 'done_when', 'notes', 'tags', 'due', 'updated', 'updated_by'].includes(k));
+
+  // custom x_ fields are edited here; other unknown fields are shown, never changed.
+  // A non-string value is edited as JSON; an empty value removes the field.
+  const xRows = [];
+  const xBox = h('div.x-fields');
+  const xErr = h('span.field-error');
+  const addXRow = (key = '', value = '', isNewRow = true) => {
+    const json = !isNewRow && typeof value !== 'string';
+    const valEl = h(`input.input${json ? '.mono' : ''}`, { type: 'text', value: json ? JSON.stringify(value) : value, placeholder: t('dlg.extraValuePh'), spellcheck: false });
+    const keyEl = isNewRow ? h('input.input.mono', { type: 'text', value: key, placeholder: t('dlg.extraKeyPh'), spellcheck: false }) : h('span.x-key.mono', { title: key }, key);
+    for (const el of [keyEl, valEl]) el.addEventListener('input', () => { xErr.textContent = ''; });
+    const row = { key, isNewRow, json, keyEl, valEl };
+    xRows.push(row);
+    xBox.append(h('div.x-row', {}, keyEl, valEl, json ? h('span.x-json', {}, t('dlg.extraJson')) : null));
+    return row;
+  };
+  const xKeys = Object.keys(card || {}).filter((k) => k.startsWith('x_'));
+  for (const k of xKeys) addXRow(k, card[k], false);
+  const unknown = Object.keys(card || {}).filter((k) => !k.startsWith('x_') && !CARD_KEYS.includes(k));
+  const xAdd = h('button.btn.small.ghost.x-add', { type: 'button' }, icon('plus', 14), t('dlg.extraAdd'));
+  xAdd.addEventListener('click', () => addXRow().keyEl.focus());
+  const extra = h('details.extra', { open: xKeys.length > 0 }, h('summary', {}, t('dlg.extra')), xBox, xAdd, xErr,
+    unknown.length ? h('div.section-label', {}, t('dlg.unknownFields')) : null,
+    unknown.length ? h('pre.diff', {}, unknown.map((k) => `${k}: ${JSON.stringify(card[k])}`).join('\n')) : null);
 
   const body = h('div.card-form', {},
     requireDoneWhen ? h('p.notice', {}, icon('alert', 16), t('dlg.needDoneWhen')) : null,
@@ -1002,22 +1050,36 @@ function openCardDialog(id, { preset = {}, requireDoneWhen = false, onCancel } =
     h('label.field.wide', {}, h('span.field-label', {}, t('dlg.doneWhen'), doneReq, h('span.field-hint', {}, t('dlg.doneWhenReq'))), doneEl, errNode('done_when')),
     field(t('dlg.notes'), area('notes', { rows: 3 }), { wide: true }),
     field(t('dlg.tags'), input('tags', { placeholder: t('dlg.tagsPh') }), { wide: true }),
-    extra.length ? h('details.extra', {}, h('summary', {}, t('dlg.extra')),
-      h('pre.diff', {}, extra.map((k) => `${k}: ${JSON.stringify(card[k])}`).join('\n'))) : null,
+    extra,
     dlOwners, dlGoals);
 
   const submit = () => {
     let ok = true;
     const setErr = (k, msg) => { if (errs[k]) errs[k].textContent = msg; ok = false; };
     if (!String(f.title).trim()) setErr('title', t('dlg.errTitle'));
-    if (NEEDS_DONE_WHEN.includes(f.column) && !String(f.done_when || '').trim()) setErr('done_when', t('dlg.errDoneWhen'));
+    if (needsDoneWhen(S.doc, f.column) && !String(f.done_when || '').trim()) setErr('done_when', t('dlg.errDoneWhen'));
     if (isNew) {
       const nid = String(f.id).trim();
       if (!ID_RE.test(nid)) setErr('id', t('dlg.errId'));
       else if (findCard(S.doc, nid)) setErr('id', t('dlg.errIdUsed'));
     }
+    const xFields = {};
+    for (const r of xRows) {
+      let key = r.isNewRow ? r.keyEl.value.trim() : r.key;
+      const raw = r.valEl.value;
+      if (r.isNewRow) {
+        if (!key && !raw.trim()) continue;
+        if (key && !key.startsWith('x_')) key = `x_${key}`;
+        if (!/^x_[A-Za-z0-9_.-]+$/.test(key)) { xErr.textContent = t('dlg.errExtraKey'); ok = false; continue; }
+        if (key in xFields || (card && key in card)) { xErr.textContent = t('dlg.errExtraUsed', { key }); ok = false; continue; }
+      }
+      if (r.json && raw.trim()) {
+        try { xFields[key] = JSON.parse(raw); } catch { xErr.textContent = t('dlg.errExtraJson', { key }); ok = false; }
+      } else xFields[key] = raw;
+    }
+    if (xErr.textContent) extra.open = true;
     if (!ok) { body.querySelector('.field-error:not(:empty)')?.closest('.field')?.querySelector('input,textarea')?.focus(); return false; }
-    const fields = { title: f.title, priority: f.priority, size: f.size, owner: f.owner, goal: f.goal, due: f.due, done_when: f.done_when, notes: f.notes, tags: f.tags };
+    const fields = { title: f.title, priority: f.priority, size: f.size, owner: f.owner, goal: f.goal, due: f.due, done_when: f.done_when, notes: f.notes, tags: f.tags, ...xFields };
     if (isNew) {
       const created = commit((doc) => addCard(doc, { ...fields, id: String(f.id).trim(), column: f.column }, { by: 'human' }));
       if (created) toast(t('toast.created', { id: created.id }), { timeout: 1600 });
@@ -1061,7 +1123,13 @@ function openCardDialog(id, { preset = {}, requireDoneWhen = false, onCancel } =
 // ---- other dialogs ---------------------------------------------------------------------------------
 
 function openBoardSettings() {
-  const f = { title: S.doc.meta?.title || '', prefix: S.doc.meta?.id_prefix || '' };
+  const lists = { owners: metaList(S.doc, 'owners').join(', '), goals: metaList(S.doc, 'goals').join(', ') };
+  const f = { title: S.doc.meta?.title || '', prefix: S.doc.meta?.id_prefix || '', ...lists };
+  const listInput = (k) => {
+    const el = h('input.input', { type: 'text', value: f[k] });
+    el.addEventListener('input', () => { f[k] = el.value; });
+    return el;
+  };
   const hint = h('span.field-note');
   const paint = () => { hint.textContent = t('settings.prefixHint', { id: nextId(S.doc, f.prefix.trim() || idPrefix({ ...S.doc, meta: { ...S.doc.meta, id_prefix: '' } })) }); };
   const title = h('input.input', { type: 'text', value: f.title });
@@ -1071,7 +1139,9 @@ function openBoardSettings() {
   paint();
   openDialog({
     title: t('settings.title'),
-    body: h('div.card-form', {}, field(t('settings.boardTitle'), title, { wide: true }), field(t('settings.prefix'), prefix, { wide: true }), hint),
+    body: h('div.card-form', {}, field(t('settings.boardTitle'), title, { wide: true }), field(t('settings.prefix'), prefix, { wide: true }), hint,
+      field(t('settings.owners'), listInput('owners'), { hint: t('settings.listHint'), wide: true }),
+      field(t('settings.goals'), listInput('goals'), { hint: t('settings.listHint'), wide: true })),
     actions: [{ spacer: true }, { label: t('dlg.cancel'), kind: 'ghost' }, {
       label: t('dlg.save'), kind: 'primary', onClick: () => {
         const p = f.prefix.trim();
@@ -1080,6 +1150,11 @@ function openBoardSettings() {
           if (!doc.meta || typeof doc.meta !== 'object') doc.meta = {};
           if (f.title.trim()) doc.meta.title = f.title.trim(); else delete doc.meta.title;
           if (p) doc.meta.id_prefix = p; else delete doc.meta.id_prefix;
+          for (const k of ['owners', 'goals']) {
+            if (f[k] === lists[k]) continue; // untouched: leave the file as it is
+            const list = [...new Set(f[k].split(',').map((x) => x.trim()).filter(Boolean))];
+            if (list.length) doc.meta[k] = list; else delete doc.meta[k];
+          }
         });
         return true;
       },
@@ -1088,9 +1163,115 @@ function openBoardSettings() {
   requestAnimationFrame(() => title.focus());
 }
 
+// ---- column dialog ----------------------------------------------------------------------------------
+// A column's id is fixed once it exists; name, colour, card limit, position and
+// extra rules live in meta.columns and can change any time.
+
+const TRANSLIT = { а: 'a', б: 'b', в: 'v', г: 'g', д: 'd', е: 'e', ё: 'e', ж: 'zh', з: 'z', и: 'i', й: 'y', к: 'k', л: 'l', м: 'm', н: 'n', о: 'o', п: 'p', р: 'r', с: 's', т: 't', у: 'u', ф: 'f', х: 'h', ц: 'ts', ч: 'ch', ш: 'sh', щ: 'sch', ъ: '', ы: 'y', ь: '', э: 'e', ю: 'yu', я: 'ya' };
+
+/** A Latin id from a column name: "На ревью" → "na-revyu". */
+function slugId(name) {
+  return [...String(name).toLowerCase()].map((ch) => TRANSLIT[ch] ?? ch).join('')
+    .replace(/[^a-z0-9_.-]+/g, '-').replace(/^[-_.]+|[-_.]+$/g, '').slice(0, 32);
+}
+
+function openColumnDialog(col) {
+  const isNew = !col;
+  const conf = isNew ? {} : columnConf(S.doc, col);
+  const others = S.doc.columns.filter((c) => c !== col);
+  const f = { label: conf.label || '', color: conf.color || '', wip: conf.wip ? String(conf.wip) : '', done_when: !!conf.done_when, closed: !!conf.closed };
+  const errs = {};
+  const errNode = (k) => { errs[k] = h('span.field-error'); return errs[k]; };
+
+  const label = h('input.input', { type: 'text', value: f.label, placeholder: isNew ? t('col.namePh') : colLabel(col) });
+  let idTouched = false;
+  const idEl = isNew ? h('input.input.mono', { type: 'text', spellcheck: false }) : null;
+  label.addEventListener('input', () => {
+    f.label = label.value;
+    if (idEl && !idTouched) idEl.value = slugId(label.value);
+  });
+  idEl?.addEventListener('input', () => { idTouched = true; errs.id.textContent = ''; });
+
+  const swatches = h('div.swatches', { role: 'radiogroup' });
+  const paintSwatches = () => swatches.querySelectorAll('.swatch').forEach((b) => {
+    b.classList.toggle('on', b.dataset.v === f.color);
+    b.setAttribute('aria-checked', String(b.dataset.v === f.color));
+  });
+  for (const v of ['', ...COLUMN_COLORS]) {
+    // "auto" is the column's default colour, drawn as a dashed ring
+    const b = h(`button.swatch${v ? '' : '.auto'}`, { type: 'button', role: 'radio', title: v || t('col.auto'), 'aria-label': v || t('col.auto'), dataset: { v }, style: v ? { '--c': `var(--${v})` } : undefined },
+      h(`span.swatch-dot${!v && col ? colCls(col) : ''}`));
+    b.addEventListener('click', () => { f.color = v; paintSwatches(); });
+    swatches.append(b);
+  }
+  paintSwatches();
+
+  const wip = h('input.input', { type: 'number', min: 1, step: 1, value: f.wip, placeholder: t('col.wipHint') });
+  wip.addEventListener('input', () => { f.wip = wip.value; errs.wip.textContent = ''; });
+
+  const pos = h('select.input', {}, h('option', { value: '0' }, t('col.posFirst')),
+    ...others.map((c, i) => h('option', { value: String(i + 1) }, t('col.posAfter', { name: colName(c) }))));
+  pos.value = String(isNew ? others.length : S.doc.columns.indexOf(col));
+
+  const check = (key, text, builtin) => {
+    const box = h('input', { type: 'checkbox', checked: builtin || f[key], disabled: builtin });
+    box.addEventListener('change', () => { f[key] = box.checked; });
+    return h('label.check', {}, box, h('span', {}, text), builtin ? h('span.field-hint', {}, t('col.builtin')) : null);
+  };
+
+  const idNote = h('p.field-note', {}, isNew ? `${t('col.id')}: ${t('col.idHint')}` : h('span', {}, `${t('col.id')}: `, h('code', {}, col), ` — ${t('col.idHint')}`));
+  const body = h('div.card-form', {},
+    isNew ? h('div.grid2', {}, field(t('col.name'), label), field(t('col.id'), idEl, { error: errNode('id') })) : field(t('col.name'), label, { wide: true }),
+    idNote,
+    field(t('col.color'), swatches, { wide: true }),
+    h('div.grid2', {},
+      field(t('col.wip'), wip, { error: errNode('wip') }),
+      field(t('col.position'), pos)),
+    field(t('col.rules'), h('div.checks', {},
+      check('done_when', t('col.needDone'), NEEDS_DONE_WHEN.includes(col)),
+      check('closed', t('col.closed'), CLOSED_COLUMNS.includes(col))), { wide: true }));
+
+  const submit = () => {
+    let ok = true;
+    const id = isNew ? idEl.value.trim() : col;
+    if (isNew && !ID_RE.test(id)) { errs.id.textContent = t('col.errId'); ok = false; }
+    else if (isNew && S.doc.columns.includes(id)) { errs.id.textContent = t('col.errIdUsed'); ok = false; }
+    const limit = f.wip.trim() === '' ? undefined : Number(f.wip);
+    if (limit !== undefined && !(Number.isInteger(limit) && limit > 0)) { errs.wip.textContent = t('col.errWip'); ok = false; }
+    if (!ok) return false;
+    const settings = { label: f.label, color: f.color, wip: limit, done_when: f.done_when, closed: f.closed };
+    const at = Number(pos.value);
+    commit((doc) => {
+      if (isNew) addColumn(doc, id, { index: at, ...settings });
+      else { moveColumn(doc, col, at); setColumnConf(doc, col, settings); }
+    });
+    if (isNew) requestAnimationFrame(() => scrollToColumn(id));
+    return true;
+  };
+
+  const actions = [];
+  if (!isNew) actions.push({ label: t('col.delete'), kind: 'danger-ghost', onClick: () => deleteColumn(col) });
+  actions.push({ spacer: true }, { label: t('dlg.cancel'), kind: 'ghost' }, { label: isNew ? t('dlg.create') : t('dlg.save'), kind: 'primary', onClick: submit });
+  const dlg = openDialog({ title: isNew ? t('col.new') : t('col.settings'), body, actions });
+  dlg.node.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); if (submit() !== false) dlg.close('action'); }
+  });
+  requestAnimationFrame(() => label.focus());
+}
+
+/** Delete an empty column (undo brings it back); returns false when it cannot go. */
+function deleteColumn(col) {
+  const n = cardsIn(S.doc, col).length;
+  if (n) { toast(t('col.notEmpty', { n }), { kind: 'warn' }); return false; }
+  if (S.doc.columns.length === 1) { toast(t('col.lastOne'), { kind: 'warn' }); return false; }
+  const name = colName(col);
+  commit((doc) => removeColumn(doc, col));
+  toast(t('col.deleted', { name }), { action: { label: t('top.undo').replace(/\s*\(.*\)$/, ''), onClick: undo } });
+  return true;
+}
+
 function openAppSettings() {
-  const theme = pref.raw('theme', 'system');
-  const seg = (items, current, onPick) => {
+  const seg =(items, current, onPick) => {
     const box = h('div.seg');
     for (const [v, label, ic] of items) {
       const b = h(`button.seg-btn${v === current ? '.on' : ''}`, { type: 'button' }, ic ? icon(ic, 15) : null, label);
@@ -1099,8 +1280,25 @@ function openAppSettings() {
     }
     return box;
   };
+  const current = document.documentElement.dataset.style || 'fun';
+  const picks = h('div.style-picks', { role: 'radiogroup' });
+  for (const s of STYLES) {
+    // each preview carries data-style, so it is drawn in that style's own tokens
+    const b = h(`button.style-pick${s === current ? '.on' : ''}`, { type: 'button', role: 'radio', 'aria-checked': String(s === current), dataset: { style: s } },
+      h('span.style-swatch', { 'aria-hidden': 'true' },
+        h('span.sp-card', {}, h('span.sp-badge', {}, 'P1'), h('span.sp-line'), h('span.sp-line.short')),
+        h('span.sp-dots', {}, ...['idea', 'todo', 'doing', 'done'].map((c) => h(`span.col-dot.c-${c}`)))),
+      h('span.style-name', {}, s.charAt(0).toUpperCase() + s.slice(1)),
+      h('span.style-desc', {}, t(`style.${s}`)));
+    b.addEventListener('click', () => {
+      picks.querySelectorAll('.style-pick').forEach((x) => { x.classList.toggle('on', x === b); x.setAttribute('aria-checked', String(x === b)); });
+      pref.setRaw('style', s);
+      applyStyle(s);
+    });
+    picks.append(b);
+  }
   const body = h('div.card-form', {},
-    field(t('settings.theme'), seg([['system', t('theme.system'), 'monitor'], ['dark', t('theme.dark'), 'moon'], ['light', t('theme.light'), 'sun']], theme, (v) => { pref.setRaw('theme', v); applyTheme(); }), { wide: true }),
+    field(t('settings.style'), picks, { wide: true }),
     field(t('settings.language'), seg([['ru', 'Русский'], ['en', 'English']], getLang(), (v) => { pref.setRaw('lang', v); setLang(v); dlg.close(); S.ui = {}; render(true); openAppSettings(); }), { wide: true }),
     h('div.about', {},
       h('span', {}, `IluBoard ${APP_VERSION}`),
@@ -1181,7 +1379,7 @@ addEventListener('resize', () => {
 // ---- start ---------------------------------------------------------------------------------------
 
 async function start() {
-  applyTheme();
+  applyStyle(pref.raw('style', 'fun'));
   S.wasNarrow = isNarrow();
   if (S.wasNarrow) S.sidebar = false;
   $('scrim').addEventListener('click', () => setSidebar(false));

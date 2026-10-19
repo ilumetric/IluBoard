@@ -114,14 +114,18 @@ through the local server.
 
 * `id` is stable: never rename it, documents link to cards by id. Letters,
   digits, `_`, `.`, `-`; unique.
-* `column` must be one of `columns`: `idea`, `todo`, `doing`, `done`, `dropped`
-  (UI labels: идея / к работе / в работе / готово / отменено).
+* `column` must be one of `columns` — the standard set is `idea`, `todo`,
+  `doing`, `done`, `dropped` (UI labels: идея / к работе / в работе / готово /
+  отменено), a board may add its own. `text` prints `## label (id)`: use the id
+  in commands. Column ids never change; names live in `meta.columns.<id>.label`.
 * Cards in `todo` and `doing` need `done_when` — a concrete criterion, e.g.
-  "Макс посмотрел и сказал да/нет". The CLI refuses to write a board without it.
+  "Макс посмотрел и сказал да/нет" — and so do cards in columns with
+  `"done_when": true` in `meta.columns`. The CLI refuses to write a board without it.
+* `meta.columns.<id>.wip` is the column's card limit: a hint, not a rule —
+  mention it to the human before going over it.
 * `priority` P0–P3, `size` S/M/L/XL, `due` and `updated` are `YYYY-MM-DD`,
-  `updated_by` is `human` or `agent`, `goal` is a milestone from `roadmap.md`
-  (`3a`, `3b`…), `owner` is free text (`max`, `producer`, `narrative`,
-  `design`, `code`).
+  `updated_by` is `human` or `agent`, `goal` is a milestone (`3a`, `3b`…),
+  `owner` is free text; `meta.owners` and `meta.goals` list the usual values.
 * `order` is the position inside a column; it is renumbered 0, 1, 2… on every
   write — do not try to keep gaps.
 * Custom fields start with `x_` and survive round trips.
