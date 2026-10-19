@@ -56,6 +56,7 @@ const S = {
   external: null, // { text } — the file changed on disk while there were unsaved edits
   server: null,
   recent: [],
+  recentKey: null, // the recent-list entry of the open board (paths alone can repeat)
   flash: new Set(), // card ids to highlight after a reload from disk
   composerCol: pref.get('composerCol', 'idea'),
   sidebar: pref.get('sidebar', innerWidth > 860),
@@ -120,7 +121,8 @@ function loadBoard(source, text, mtime = null) {
   if (!doc.columns.includes(S.composerCol)) S.composerCol = doc.columns[0];
   const v = validate(doc);
   if (!v.ok) toast(t('open.invalid', { n: v.errors.length }), { kind: 'warn', timeout: 6000, action: { label: t('errors.title'), onClick: showProblems } });
-  disk.remember(source, doc.meta?.title || source.name).then(refreshRecent);
+  S.recentKey = null;
+  rememberSource(source);
   if (isNarrow()) S.sidebar = false;
   render(true);
   return true;
@@ -221,6 +223,7 @@ async function closeBoard() {
   if (!(await confirmDiscard())) return;
   S.doc = null;
   S.source = null;
+  S.recentKey = null;
   S.external = null;
   render(true);
 }
@@ -270,7 +273,7 @@ async function save({ as = false } = {}) {
     S.mtime = mtime;
     S.external = null;
     S.missing = false;
-    disk.remember(src, S.doc.meta?.title || src.name).then(refreshRecent);
+    rememberSource(src);
     toast(t('save.ok'), { kind: 'ok', timeout: 1800 });
   } catch (e) {
     toast(e.message === 'permission' ? t('save.denied') : t('save.failed', { msg: e.message }), { kind: 'error', timeout: 6000 });
@@ -438,7 +441,7 @@ function renderSidebar() {
   const recent = S.recent.filter((r) => r.kind === 'fsa' || (S.server && r.host === location.host));
   if (!recent.length) rec.append(h('div.side-hint', {}, t('side.recentEmpty')));
   for (const r of recent) {
-    const active = S.source && S.source.kind === r.kind && S.source.path === r.path;
+    const active = !!S.source && r.key === S.recentKey;
     const name = r.title || r.path;
     const row = h(`div.side-row.recent${active ? '.active' : ''}`, { role: 'button', tabindex: 0, title: r.path },
       h('span.recent-ico', { style: { '--h': hue(name) }, 'aria-hidden': 'true' }, String(name).trim().charAt(0).toUpperCase() || '#'),
@@ -1341,6 +1344,13 @@ function focusSearch() {
   if (isNarrow()) setSidebar(false);
   S.ui.search?.focus();
   S.ui.search?.select();
+}
+
+/** Put the open board on top of the recent list and mark its entry as the open one. */
+async function rememberSource(source) {
+  const key = await disk.remember(source, S.doc?.meta?.title || source.name);
+  if (source === S.source) S.recentKey = key;
+  refreshRecent();
 }
 
 async function refreshRecent() {

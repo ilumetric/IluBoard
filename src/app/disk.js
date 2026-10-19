@@ -233,9 +233,13 @@ export async function recentList() {
   } catch { return []; }
 }
 
-/** Remember a source (fsa: its handle; server: its path). */
+/**
+ * Remember a source (fsa: its handle; server: its path). Returns the entry's key
+ * (null when not remembered): two files can share a name and a path label —
+ * every board.json opened with "Open file" is just "board.json" — the key cannot.
+ */
 export async function remember(source, title) {
-  if (source.kind === 'memory') return;
+  if (source.kind === 'memory') return null;
   try {
     const list = await recentList();
     let key = source.kind === 'server' ? `server:${location.host}:${source.path}` : null;
@@ -250,7 +254,8 @@ export async function remember(source, title) {
     await tx('readwrite', (s) => s.put(entry));
     const extra = (await recentList()).slice(MAX_RECENT);
     if (extra.length) await tx('readwrite', (s) => extra.forEach((e) => s.delete(e.key)));
-  } catch { /* IndexedDB unavailable: no recent list */ }
+    return key;
+  } catch { return null; } // IndexedDB unavailable: no recent list
 }
 
 export async function forget(key) {
