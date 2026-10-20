@@ -6,7 +6,7 @@
 /* ---------- styles ----------
    Three looks over one layout, picked in Settings and set as <html data-style>:
    fun   — FigJam: marker colours, stickers that tilt, hand-written notes, doodles
-   calm  — restrained graphite: muted colours, nothing tilts, one typeface
+   calm  — restrained graphite: muted colours, nothing tilts, neat hand-written notes
    oli   — powdery rose and lilac, capsule controls, flowers and hearts on the canvas
    The same blocks also apply to [data-style] previews in the settings dialog. */
 
@@ -68,6 +68,7 @@
   --r: 0; /* blocks: cards, sticky notes, choices */
   --r-field: 0; /* text fields, which may grow to several lines */
   --r-pill: 0; /* controls: buttons, chips, badges, rows, tags */
+  --corner: round; /* corner-shape of every radius above */
   --spring: cubic-bezier(0.34, 1.56, 0.64, 1);
   --font: "Rubik", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Arial, sans-serif;
   --hand: "Caveat", "Segoe Print", "Comic Sans MS", cursive;
@@ -132,8 +133,8 @@
   --r-pill: 0;
   --spring: cubic-bezier(0.2, 0.8, 0.3, 1);
   --font: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Arial, sans-serif;
-  --hand: var(--font);
-  --hk: 0.74;
+  --hand: "Bad Script", "Segoe Script", cursive;
+  --hk: 0.95;
   --hand-w: 400;
 
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
@@ -186,10 +187,11 @@
 
   --wiggle: 0.6;
   --sat: 0.7;
-  --r-outer: 26px; /* = an 18px capsule + 8px padding */
-  --r: 16px; /* = 26px - the 10px a card sits inside its column */
-  --r-field: 12px;
+  --r-outer: 34px; /* squircle reads tighter than round, so every radius is larger */
+  --r: 24px; /* = 34px - the 10px a card sits inside its column */
+  --r-field: 16px;
   --r-pill: 999px; /* capsules */
+  --corner: squircle; /* superellipse: same radius reads tighter than round */
   --spring: cubic-bezier(0.34, 1.4, 0.64, 1);
   --font: "Nunito", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Arial, sans-serif;
   --hand: "Marck Script", "Segoe Script", cursive;
@@ -220,7 +222,7 @@
 }
 
 /* ---------- base ---------- */
-* { box-sizing: border-box; }
+*, ::before, ::after { box-sizing: border-box; corner-shape: var(--corner); }
 html, body { height: 100%; margin: 0; }
 body {
   background-color: var(--canvas);
