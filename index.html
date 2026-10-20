@@ -1,10 +1,10 @@
 <!doctype html>
-<html lang="ru" data-style="fun">
+<html lang="ru" data-style="calm">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="color-scheme" content="dark">
-  <meta name="theme-color" content="#18181b">
+  <meta name="theme-color" content="#141516">
   <title>IluBoard</title>
   <meta name="description" content="IluBoard — канбан-доска, у которой источник правды — один board.json в git-репозитории. Kanban board whose source of truth is one board.json in a git repo.">
   <link rel="help" type="text/plain" href="llms.txt" title="Instructions for AI agents">
@@ -17,7 +17,7 @@
       try { l = localStorage.getItem('iluboard.lang'); s = localStorage.getItem('iluboard.style'); } catch (e) { /* storage disabled */ }
       if (l !== 'ru' && l !== 'en') l = /^ru\b/i.test(navigator.language || '') ? 'ru' : 'en';
       document.documentElement.lang = l;
-      document.documentElement.setAttribute('data-style', s === 'calm' || s === 'oli' ? s : 'fun');
+      document.documentElement.setAttribute('data-style', s === 'fun' || s === 'oli' ? s : 'calm');
     })();
   </script>
   <link rel="preconnect" href="https://fonts.googleapis.com">

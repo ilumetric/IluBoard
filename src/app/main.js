@@ -35,7 +35,7 @@ const pref = {
 const STYLES = ['fun', 'calm', 'oli'];
 
 function applyStyle(v) {
-  const style = STYLES.includes(v) ? v : 'fun';
+  const style = STYLES.includes(v) ? v : 'calm';
   document.documentElement.dataset.style = style;
   document.querySelector('meta[name="theme-color"]')?.setAttribute('content', getComputedStyle(document.documentElement).getPropertyValue('--canvas').trim());
 }
@@ -1283,7 +1283,7 @@ function openAppSettings() {
     }
     return box;
   };
-  const current = document.documentElement.dataset.style || 'fun';
+  const current = document.documentElement.dataset.style || 'calm';
   const picks = h('div.style-picks', { role: 'radiogroup' });
   for (const s of STYLES) {
     // each preview carries data-style, so it is drawn in that style's own tokens
@@ -1389,7 +1389,7 @@ addEventListener('resize', () => {
 // ---- start ---------------------------------------------------------------------------------------
 
 async function start() {
-  applyStyle(pref.raw('style', 'fun'));
+  applyStyle(pref.raw('style', 'calm'));
   S.wasNarrow = isNarrow();
   if (S.wasNarrow) S.sidebar = false;
   $('scrim').addEventListener('click', () => setSidebar(false));
